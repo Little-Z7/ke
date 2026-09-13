@@ -60,9 +60,9 @@ fn setup(installed: &str, answer: &str, handoff: bool) -> SetupResult {
         handoff
     ));
     let app = if cfg!(debug_assertions) {
-        "herdr-dev"
+        "ke-dev"
     } else {
-        "herdr"
+        "ke"
     };
     fs::create_dir_all(root.join("bin")).unwrap();
     fs::create_dir_all(root.join("config").join(app)).unwrap();

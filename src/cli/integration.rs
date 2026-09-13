@@ -1,5 +1,8 @@
 use crate::api::schema::IntegrationTarget;
 
+// Modified by ke: see run_integration_command.
+const KE_DISABLE_INTEGRATION_INSTALL: bool = true;
+
 pub(super) fn run_integration_command(args: &[String]) -> std::io::Result<i32> {
     let Some(subcommand) = args.first().map(|arg| arg.as_str()) else {
         print_integration_help();
@@ -7,6 +10,12 @@ pub(super) fn run_integration_command(args: &[String]) -> std::io::Result<i32> {
     };
 
     match subcommand {
+        // Modified by ke: ke reuses the hooks upstream herdr already installed for each CLI (they talk to
+        // whichever socket HERDR_SOCKET_PATH names). Installing from ke would overwrite the same files.
+        "install" | "uninstall" if KE_DISABLE_INTEGRATION_INSTALL => {
+            eprintln!("ke does not install or remove agent integrations; it reuses the ones installed by herdr (see `herdr integration status`).");
+            Ok(2)
+        }
         "install" => integration_install(&args[1..]),
         "uninstall" => integration_uninstall(&args[1..]),
         "status" => integration_status(&args[1..]),

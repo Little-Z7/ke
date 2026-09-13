@@ -52,6 +52,7 @@ pub(crate) enum KeybindAction {
     SplitHorizontal,
     ClosePane,
     EditScrollback,
+    ToggleComposer, // Modified by ke
     CopyMode,
     Zoom,
     EnterResizeMode,
@@ -120,6 +121,7 @@ pub(crate) fn resolve_non_indexed_action(
         (&keybinds.close_tab, KeybindAction::CloseTab),
         (&keybinds.rename_pane, KeybindAction::RenamePane),
         (&keybinds.edit_scrollback, KeybindAction::EditScrollback),
+        (&keybinds.toggle_composer, KeybindAction::ToggleComposer), // Modified by ke
         (&keybinds.copy_mode, KeybindAction::CopyMode),
         (&keybinds.focus_pane_left, KeybindAction::FocusPaneLeft),
         (&keybinds.focus_pane_down, KeybindAction::FocusPaneDown),

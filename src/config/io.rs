@@ -19,11 +19,12 @@ const KNOWN_TOP_LEVEL_CONFIG_KEYS: &[&str] = &[
     "worktrees",
 ];
 
+// Modified by ke: use a separate app dir so config, sockets, sessions, logs and plugins never mix with upstream herdr.
 pub fn app_dir_name() -> &'static str {
     if cfg!(debug_assertions) {
-        "herdr-dev"
+        "ke-dev"
     } else {
-        "herdr"
+        "ke"
     }
 }
 

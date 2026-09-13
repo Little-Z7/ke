@@ -3,6 +3,8 @@ use std::collections::{HashMap, HashSet, VecDeque};
 mod actions;
 mod agent_sidebar;
 mod aggregate_navigation;
+// Modified by ke: native composer bar.
+mod composer;
 mod composition;
 mod config;
 mod context_menu;
@@ -13,6 +15,7 @@ mod endpoint_navigation;
 mod endpoint_notices;
 mod endpoint_sidebar;
 mod endpoints;
+mod ke_panel; // Modified by ke
 pub(super) use endpoints::*;
 mod global_menu;
 mod graphics;

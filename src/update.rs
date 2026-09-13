@@ -2110,7 +2110,16 @@ fn homebrew_cellar_keg_root(path: &Path) -> Option<PathBuf> {
 // ---------------------------------------------------------------------------
 
 /// Manual self-update command (`herdr update`).
+// Modified by ke: ke never self-updates, so an upstream herdr release can never replace the ke binary.
+pub(crate) const KE_DISABLE_SELF_UPDATE: bool = true;
+
 pub fn self_update(options: SelfUpdateOptions) -> Result<Version, String> {
+    if KE_DISABLE_SELF_UPDATE {
+        let _ = &options;
+        return Err(
+            "ke does not self-update; install new versions from the ke release channel".into(),
+        );
+    }
     let channel = UpdateChannel::configured();
 
     if is_homebrew_managed_install() {

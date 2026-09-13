@@ -163,8 +163,9 @@ pub struct App {
 pub(crate) const APP_EVENT_CHANNEL_CAPACITY: usize = 256;
 pub(crate) const APP_EVENT_DRAIN_LIMIT: usize = 64;
 
+// Modified by ke: background update checks are always off (see update::KE_DISABLE_SELF_UPDATE).
 fn auto_updates_enabled(background_updates: bool) -> bool {
-    background_updates && !cfg!(debug_assertions)
+    background_updates && !cfg!(debug_assertions) && !crate::update::KE_DISABLE_SELF_UPDATE
 }
 
 fn background_update_check_enabled(background_updates: bool, check_enabled: bool) -> bool {

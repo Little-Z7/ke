@@ -141,6 +141,8 @@ fn apply_pane_launch_env(cmd: &mut CommandBuilder, launch_env: &PaneLaunchEnv) {
         cmd.env(key, value);
     }
     cmd.env(crate::HERDR_ENV_VAR, crate::HERDR_ENV_VALUE);
+    // Modified by ke: mark ke panes so the HERDR_* variables inherited inside them are trusted (see main.rs).
+    cmd.env("KE_ENV", "1");
     crate::integration::apply_pane_base_env(cmd);
     crate::platform::apply_pane_runtime_marker(cmd);
     match &launch_env.identity {

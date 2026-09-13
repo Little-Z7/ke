@@ -12,7 +12,9 @@ pub(crate) const MAX_ENDPOINT_BOOT_ID_BYTES: usize = 128;
 pub(crate) const MAX_ENDPOINT_REQUEST_ID_BYTES: usize = 128;
 const ENDPOINT_RESPONSE_CHUNK_BYTES: usize = 512 * 1024;
 
+// Modified by ke: the composer bar submits through agent.prompt / pane.send_input from the client shell.
 const CLIENT_SHELL_METHODS: &[&str] = &[
+    "agent.prompt",
     "client_shell.surface.set",
     "command.invoke",
     "integration.install",
@@ -30,6 +32,7 @@ const CLIENT_SHELL_METHODS: &[&str] = &[
     "pane.resize",
     "pane.scroll",
     "pane.selection.read",
+    "pane.send_input",
     "pane.split",
     "pane.swap",
     "pane.zoom",

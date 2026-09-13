@@ -928,6 +928,11 @@ pub(crate) struct ClientShellState {
     pub(super) mode: ClientShellMode,
     pub(super) navigate_workspace_id: Option<String>,
     pub(super) overlay: Option<ClientShellOverlay>,
+    // Modified by ke: native composer bar state and its processor hook.
+    pub(super) composer: Option<super::composer::ClientComposer>,
+    pub(super) composer_hook: super::composer::ComposerHook,
+    pub(super) composer_pending: Option<super::composer::ComposerPending>, // Modified by ke
+    pub(super) ke_panel: super::ke_panel::KePanelSource,                   // Modified by ke
     pub(super) previous_pane_id: Option<String>,
     pub(super) pane_mouse_gesture: Option<ClientPaneMouseGesture>,
     pub(super) url_click_consumes_until_up: bool,
@@ -1096,6 +1101,10 @@ impl ClientShellState {
             host_mouse_pixels: None,
             input_leases: ClientInputLeases::default(),
             popup_pending: false,
+            composer: None,
+            composer_hook: super::composer::call_composer_hook,
+            composer_pending: None, // Modified by ke
+            ke_panel: super::ke_panel::KePanelSource::from_env(), // Modified by ke
             popup_pending_deadline: None,
             next_request_id: 1,
             pending_requests: HashMap::new(),
@@ -1171,7 +1180,7 @@ impl ClientShellState {
         }
     }
 
-    pub(super) fn layout(&self, cols: u16, rows: u16) -> ClientShellLayout {
+    pub(super) fn base_layout(&self, cols: u16, rows: u16) -> ClientShellLayout {
         self.config.layout(
             cols,
             rows,
@@ -1179,6 +1188,17 @@ impl ClientShellState {
             self.focused_tab_count(),
             self.sidebar_width,
         )
+    }
+
+    // Modified by ke: reserve rows under the pane surface for the composer bar while it is open.
+    pub(super) fn layout(&self, cols: u16, rows: u16) -> ClientShellLayout {
+        let mut layout = self.base_layout(cols, rows);
+        if self.composer.is_some()
+            && layout.pane_surface.height > super::composer::COMPOSER_ROWS + 2
+        {
+            layout.pane_surface.height -= super::composer::COMPOSER_ROWS;
+        }
+        layout
     }
 
     pub(crate) fn surface_size(&self, cols: u16, rows: u16) -> ClientSurfaceSize {
@@ -1746,6 +1766,11 @@ impl ClientShellState {
         });
         self.copy_feedback_deadline = Some(now + std::time::Duration::from_secs(2));
         true
+    }
+
+    // Modified by ke: refresh the coordinator panel from the main-loop timer.
+    pub(crate) fn tick_ke_panel(&mut self, now: std::time::Instant) -> bool {
+        self.ke_panel.tick(now)
     }
 
     pub(crate) fn tick_copy_feedback(&mut self, now: std::time::Instant) -> bool {

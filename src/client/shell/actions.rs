@@ -120,6 +120,11 @@ impl ClientShellState {
                     outcome.repaint = true;
                     return;
                 }
+                // Modified by ke: toggle the composer bar.
+                if action == crate::input::KeybindAction::ToggleComposer {
+                    self.toggle_composer(outcome);
+                    return;
+                }
                 if action == crate::input::KeybindAction::RenamePane {
                     self.open_rename_pane_overlay();
                     outcome.repaint = true;

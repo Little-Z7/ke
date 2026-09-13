@@ -171,6 +171,7 @@ const DEFAULT_CONFIG: &str = r##"# herdr configuration
 # close_tab = "prefix+shift+x"
 # rename_pane = "prefix+shift+p"
 # edit_scrollback = "prefix+e"
+# toggle_composer = "prefix+i"
 # focus_pane_left = "prefix+h"
 # focus_pane_down = "prefix+j"
 # focus_pane_up = "prefix+k"
@@ -225,7 +226,7 @@ const DEFAULT_CONFIG: &str = r##"# herdr configuration
 # headless_rows = 40
 
 # [worktrees]
-# directory = "~/.herdr/worktrees"
+# directory = "~/.ke/worktrees"
 
 [ui]
 # Sidebar width (auto-scaled based on workspace names, this sets the default)
@@ -482,7 +483,31 @@ where
         .collect()
 }
 
+// Modified by ke: when ke is started from inside an upstream herdr pane (HERDR_ENV=1 but no KE_ENV),
+// drop the inherited HERDR_* locator variables so ke never talks to herdr's server or trips the
+// nested guard. Inside ke's own panes KE_ENV=1 is set, so these variables are kept and point at ke.
+const KE_INHERITED_HERDR_VARS: [&str; 9] = [
+    "HERDR_ENV",
+    "HERDR_SOCKET_PATH",
+    "HERDR_CLIENT_SOCKET_PATH",
+    "HERDR_SESSION",
+    "HERDR_CONFIG_PATH",
+    "HERDR_PANE_ID",
+    "HERDR_TAB_ID",
+    "HERDR_WORKSPACE_ID",
+    "HERDR_BIN_PATH",
+];
+
+fn ke_isolate_inherited_herdr_env() {
+    if std::env::var_os("KE_ENV").is_none() && std::env::var_os(HERDR_ENV_VAR).is_some() {
+        for key in KE_INHERITED_HERDR_VARS {
+            std::env::remove_var(key);
+        }
+    }
+}
+
 fn main() -> io::Result<()> {
+    ke_isolate_inherited_herdr_env();
     let raw_args: Vec<String> = match args_as_utf8(std::env::args_os()) {
         Ok(args) => args,
         Err(err) => {

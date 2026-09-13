@@ -420,6 +420,11 @@ pub(crate) fn render_sidebar(
         }
     }
 
+    // Modified by ke: the coordinator panel takes the bottom of the agents section.
+    let (detail_area, ke_area) = super::ke_panel::split_detail(detail_area, state.ke_panel);
+    if let Some(panel) = state.ke_panel {
+        super::ke_panel::render_ke_panel(buffer, ke_area, panel, palette);
+    }
     super::render_agent_panel(
         buffer,
         detail_area,

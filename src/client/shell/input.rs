@@ -190,6 +190,10 @@ impl ClientShellState {
                     } else if !self.popup_pending {
                         if self.insert_overlay_text(&text) {
                             outcome.repaint = true;
+                        } else if self.composer_accepts_text() {
+                            // Modified by ke: typed and pasted text goes to the composer bar.
+                            self.composer_insert(&text);
+                            outcome.repaint = true;
                         } else if self.overlay.is_none() && self.mode == ClientShellMode::Terminal {
                             self.push_focused_pane_event(
                                 ClientPaneInputEvent::TextCommit(text),
@@ -222,6 +226,10 @@ impl ClientShellState {
                         );
                     } else if !self.popup_pending {
                         if self.insert_overlay_text(&text) {
+                            outcome.repaint = true;
+                        } else if self.composer_accepts_text() {
+                            // Modified by ke: typed and pasted text goes to the composer bar.
+                            self.composer_insert(&text);
                             outcome.repaint = true;
                         } else if self.overlay.is_none() && self.mode == ClientShellMode::Terminal {
                             self.push_focused_pane_event(
@@ -508,6 +516,10 @@ impl ClientShellState {
         }
         if self.overlay.is_some() {
             self.route_overlay_key(key, outcome);
+            return None;
+        }
+        // Modified by ke: the composer bar takes text and editing keys while it is open.
+        if self.composer_handle_key(key, outcome) {
             return None;
         }
         if matches!(key.code, KeyCode::Modifier(_)) {

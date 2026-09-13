@@ -2009,6 +2009,7 @@ async fn run_client_loop(
                     let (effects, outcome, frame) = {
                         let shell = state.shell.as_mut().expect("checked shell mode");
                         let mut outcome = shell.tick_selection_autoscroll(now);
+                        shell.tick_composer(now, &mut outcome); // Modified by ke
                         for expired in expired_endpoints {
                             if !shell.endpoint_is_active(&expired.endpoint_id) {
                                 continue;
@@ -2022,7 +2023,9 @@ async fn run_client_loop(
                             outcome.actions.extend(actions);
                         }
                         let (effects, notification_repaint) = shell.tick_notifications(now);
-                        outcome.repaint |= notification_repaint | shell.tick_copy_feedback(now);
+                        outcome.repaint |= notification_repaint
+                            | shell.tick_copy_feedback(now)
+                            | shell.tick_ke_panel(now); // Modified by ke
                         let frame = outcome
                             .repaint
                             .then(|| shell.compose(state.reported_size.0, state.reported_size.1))

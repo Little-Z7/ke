@@ -56,6 +56,7 @@ impl ClientShellState {
                 selected_workspace_id: self.navigate_workspace_id.as_deref(),
                 dragged_workspace_id: None,
                 workspace_drop_indicator_row: None,
+                ke_panel: self.ke_panel.panel(), // Modified by ke
             },
             &mut self.hits,
         );
@@ -156,6 +157,7 @@ impl ClientShellState {
                     .flatten(),
                 dragged_workspace_id,
                 workspace_drop_indicator_row,
+                ke_panel: self.ke_panel.panel(), // Modified by ke
             },
         );
         self.hits.panes = surface
@@ -261,6 +263,17 @@ impl ClientShellState {
             self.hits.tab_scroll_left = Rect::default();
             self.hits.tab_scroll_right = Rect::default();
         }
+        // Modified by ke: draw the composer bar in the rows reserved under the pane surface.
+        let composer_cursor = match (self.composer_area(cols, rows), self.composer.as_ref()) {
+            (Some(area), Some(composer)) => super::composer::render_composer(
+                &mut buffer,
+                area,
+                composer,
+                &self.composer_target_label(),
+                &self.config.palette,
+            ),
+            _ => None,
+        };
         let mut frame = FrameData::from_ratatui_buffer_with_hyperlinks(&buffer, None, &[]);
         let mode_bar_cells = mode_bar.map(|bar| {
             let start = usize::from(bar.y) * usize::from(frame.width) + usize::from(bar.x);
@@ -268,6 +281,10 @@ impl ClientShellState {
         });
         blit_pane_surface(&mut frame, &surface.frame, layout.pane_surface);
         restore_mode_bar(&mut frame, mode_bar, mode_bar_cells.as_deref());
+        // Modified by ke: the cursor sits in the composer while it takes the keyboard.
+        if composer_cursor.is_some() && self.composer_accepts_text() {
+            frame.cursor = composer_cursor;
+        }
         let has_selection = self
             .selection
             .as_ref()

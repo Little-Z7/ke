@@ -226,6 +226,7 @@ pub(super) struct ShellRenderState<'a> {
     pub(super) selected_workspace_id: Option<&'a str>,
     pub(super) dragged_workspace_id: Option<&'a str>,
     pub(super) workspace_drop_indicator_row: Option<u16>,
+    pub(super) ke_panel: Option<&'a super::ke_panel::KePanel>, // Modified by ke
 }
 
 pub(super) fn render_shell(
