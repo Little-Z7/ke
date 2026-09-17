@@ -22,7 +22,7 @@ curl -fsSL https://github.com/Little-Z7/ke/releases/latest/download/ke-install.s
 
 The script installs `~/.local/bin/ke` (`KE_INSTALL_DIR` changes it) after checking the release `SHA256SUMS`. Set `KE_RELEASE_TAG=ke-v0.1.0` to pin a version. Run it again to update; `ke update` refuses on purpose and prints this command instead.
 
-To build from source, run `scripts/ke-install.sh` in a checkout (needs Rust and Zig 0.15.2). Do not use `cargo install`: it would produce a binary named `herdr`.
+To build from source, run `scripts/ke-install.sh` in a checkout (needs Rust and the Zig version pinned in `vendor/libghostty-vt/build.zig.zon`, 0.16.0 for herdr 0.9.1). Do not use `cargo install`: it would produce a binary named `herdr`.
 
 ## Isolation from herdr
 

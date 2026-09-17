@@ -48,7 +48,7 @@ impl App {
             ("HERDR_PLUGIN_ID".to_string(), plugin.plugin_id.clone()),
             ("HERDR_PLUGIN_CONTEXT_JSON".to_string(), context_json),
         ]);
-        if let Ok(current_exe) = std::env::current_exe() {
+        if let Ok(current_exe) = crate::platform::launch_executable() {
             env.push((
                 "HERDR_BIN_PATH".to_string(),
                 current_exe.display().to_string(),

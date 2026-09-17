@@ -25,14 +25,17 @@ for arg in "$@"; do
 done
 
 if [[ "$build" == 1 ]]; then
-  # build.rs needs Zig 0.15.2. If it is neither on PATH nor given through ZIG,
-  # fall back to a toolchain unpacked next to the repo (../ke-tools/zig-*/zig). A local
-  # zig-macos27-shim wrapper wins when present: plain Zig 0.15.2 cannot link on macOS 27.
+  # build.rs needs the Zig version pinned by vendor/libghostty-vt/build.zig.zon (0.16.0 since
+  # herdr 0.9.1). If it is neither on PATH nor given through ZIG, fall back to a toolchain
+  # unpacked next to the repo (../ke-tools/zig-*/zig), preferring the pinned version when
+  # several are unpacked. A local zig-macos27-shim wrapper wins when present: plain Zig
+  # could not link on macOS 27 with 0.15.2.
   if [[ -z "${ZIG:-}" ]] && ! command -v zig >/dev/null 2>&1; then
     # Keep the path canonical: cargo fingerprints the ZIG value, so a different
     # spelling of the same path would rerun the zig build for nothing.
     tools_dir="$(dirname -- "$ROOT_DIR")/ke-tools"
-    for candidate in "$tools_dir"/zig-macos27-shim/zig "$tools_dir"/zig-*/zig; do
+    zig_version=$(sed -n 's/^\s*\.minimum_zig_version = "\(.*\)",$/\1/p' "$ROOT_DIR/vendor/libghostty-vt/build.zig.zon")
+    for candidate in "$tools_dir"/zig-macos27-shim/zig "$tools_dir"/zig-*-"${zig_version:-none}"/zig "$tools_dir"/zig-*/zig; do
       if [[ -x "$candidate" ]]; then
         export ZIG="$candidate"
         break

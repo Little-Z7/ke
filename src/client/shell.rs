@@ -3,8 +3,8 @@ use std::collections::{HashMap, HashSet, VecDeque};
 mod actions;
 mod agent_sidebar;
 mod aggregate_navigation;
-// Modified by ke: native composer bar.
-mod composer;
+mod workspace_navigation;
+use workspace_navigation::WorkspaceNavigationTarget;
 mod composition;
 mod config;
 mod context_menu;
@@ -15,12 +15,12 @@ mod endpoint_navigation;
 mod endpoint_notices;
 mod endpoint_sidebar;
 mod endpoints;
-mod ke_panel; // Modified by ke
 pub(super) use endpoints::*;
 mod global_menu;
 mod graphics;
 mod input;
 mod input_source;
+mod link_hover;
 mod mobile;
 mod mouse;
 mod notification_policy;
@@ -32,7 +32,15 @@ mod scroll;
 mod settings;
 mod state;
 mod surface_patch;
+mod text_editor;
+mod word_selection;
 mod worktrees;
+// Modified by ke: the shell's own modules stay together at the end of the list so upstream
+// insertions above never collide with them.
+mod composer;
+mod ke_panel;
+use text_editor::TextEditor;
+use word_selection::ClientWordSelection;
 
 pub(in crate::client::shell) use render::sidebar;
 pub(crate) use state::*;
@@ -61,30 +69,6 @@ use crate::protocol::{
 };
 #[cfg(test)]
 use crate::raw_input::RawInputEvent;
-
-fn delete_overlay_word(rename: &mut ClientRenameOverlay) {
-    if rename.replace_on_type {
-        rename.input.clear();
-        rename.replace_on_type = false;
-        return;
-    }
-    while rename.input.chars().last().is_some_and(char::is_whitespace) {
-        rename.input.pop();
-    }
-    let Some(word) = rename
-        .input
-        .chars()
-        .last()
-        .map(|character| character.is_alphanumeric() || character == '_')
-    else {
-        return;
-    };
-    while rename.input.chars().last().is_some_and(|character| {
-        !character.is_whitespace() && (character.is_alphanumeric() || character == '_') == word
-    }) {
-        rename.input.pop();
-    }
-}
 
 fn target_event_message(target: ClientInputTarget, event: ClientPaneInputEvent) -> ClientMessage {
     match target {

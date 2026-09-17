@@ -1,6 +1,6 @@
 # 壳（ke）
 
-本仓库是 [herdr](https://github.com/herdrdev/herdr) 的修改版（fork），基于 herdr v0.9.0（提交 b99002ac），遵循 Apache License 2.0（见 LICENSE）。
+本仓库是 [herdr](https://github.com/herdrdev/herdr) 的修改版（fork），基于 herdr v0.9.1（首个基线 v0.9.0，提交 b99002ac；2026-09-17 合并 v0.9.1），遵循 Apache License 2.0（见 LICENSE）。
 
 - 产品名"壳"，安装后的命令名 `ke`，直接运行 `ke` 启动 TUI。与上游 herdr 不是同一产品，不隶属于 herdr 项目，也未获其背书；提到 herdr 只为说明来源。
 - cargo 的二进制目标名仍是上游的 `herdr`，因为上游测试与工具依赖 `CARGO_BIN_EXE_herdr`；改名只发生在安装与打包这一步。不要用 `cargo install`，它会装出一个与上游同名的 `herdr`。子命令帮助里的 `herdr <command>` 同样保留上游写法（顶层帮助有说明），以便合并上游。
@@ -18,7 +18,7 @@ curl -fsSL https://github.com/Little-Z7/ke/releases/latest/download/ke-install.s
 - 装到 `~/.local/bin/ke`（`KE_INSTALL_DIR` 可改），下载后按发布里的 `SHA256SUMS` 校验。`KE_RELEASE_TAG=ke-v0.1.0` 可指定版本。更新就是重新运行一次。
 - 壳不自带 agent 状态钩子的安装：它复用上游 herdr 为各 CLI 装好的钩子（钩子按窗格里的 `HERDR_SOCKET_PATH` 找 socket，在壳的窗格里就会连到壳）。需要钩子的话先装上游 herdr 并执行 `herdr integration install <agent>`；没有钩子时壳退回到基于屏幕内容的状态检测。
 - 输入栏的本机处理进程（脱敏等）和侧栏面板的协调进程不在本仓库里。没有它们时输入栏原文直通，侧栏 ke 面板不显示。两者的路径默认在 `~/.workcat/ke/` 下，可用 `config.toml` 的 `[ke]` 段（`composer_socket`、`panel_file`）或环境变量（`KE_COMPOSER_SOCKET`、`KE_PANEL_FILE` / `WORKCAT_KE_HOME`）修改。协议与用法见 `docs/next/website/src/content/docs/ke.mdx`（中文版 `zh-cn/ke.mdx`）。
-- 从源码安装：`scripts/ke-install.sh`（需要 Rust 与 Zig 0.15.2）。
+- 从源码安装：`scripts/ke-install.sh`（需要 Rust 与 `vendor/libghostty-vt/build.zig.zon` 里 `minimum_zig_version` 指定的 Zig，herdr 0.9.1 起为 0.16.0）。
 
 ## 发布
 
@@ -84,6 +84,12 @@ git tag ke-v<KE_VERSION> && git push origin ke/main ke-v<KE_VERSION>
 | 2026-09-17 | src/main.rs | 默认配置模板加注释掉的 `[ke]` 段 |
 | 2026-09-17 | docs/next/website/src/data/config-reference.json | 新增 `ke` 段：`ke.composer_socket`、`ke.panel_file` |
 | 2026-09-17 | docs/next/website/src/content/docs/ke.mdx、zh-cn/ke.mdx、ja/ke.mdx（新增） | 壳的用户文档：安装、与 herdr 的隔离、输入栏与处理进程协议、侧栏面板与 panel.json 格式、`[ke]` 配置、限制 |
+| 2026-09-17 | （合并上游 v0.9.1） | 6 个文件 7 处冲突：`src/client/mod.rs`、`src/client/shell.rs`、`src/client/shell/state.rs`、`src/client/shell/composition.rs`（两侧都留）；`src/client/shell/composition.rs` 里 `ke_panel` 一行放进上游重构后的 `ShellRenderState`；`tests/cli/sessions.rs` 保留壳的"pi: not installed"断言 |
+| 2026-09-17 | src/ke_env.rs（新增）、src/main.rs | 启动时清理继承的 `HERDR_*` 的逻辑从 `main.rs` 搬到独立文件，`main.rs` 只剩 `mod ke_env;` 与一行调用，减少与上游的位置冲突；补 2 个测试 |
+| 2026-09-17 | src/client/shell.rs | 壳的 `mod composer; mod ke_panel;` 收到 mod 列表末尾，上游在列表中间加模块时不再冲突 |
+| 2026-09-17 | scripts/ke-install.sh | Zig 回退路径按 `build.zig.zon` 的 `minimum_zig_version` 优先挑对应版本（herdr 0.9.1 起需要 Zig 0.16.0） |
+| 2026-09-17 | .github/workflows/ke-release.yml | 与上游 release.yml 一致改用 `vercel-labs/setup-zig` 安装 Zig 0.16.0（含 macOS，去掉 Homebrew zig@0.15 变通） |
+| 2026-09-17 | tests/machine_api.rs、tests/session_delete.rs | 上游 v0.9.1 新增的测试里应用目录名 herdr-dev → ke-dev（同 2026-09-13 对 tests/*.rs 的处理） |
 
 ## 同步上游
 

@@ -22,7 +22,7 @@ curl -fsSL https://github.com/Little-Z7/ke/releases/latest/download/ke-install.s
 
 脚本会按发布中的 `SHA256SUMS` 校验后安装到 `~/.local/bin/ke`（`KE_INSTALL_DIR` 可改）。设置 `KE_RELEASE_TAG=ke-v0.1.0` 可固定版本。更新就是再运行一次；`ke update` 会有意拒绝，并把这条命令打印出来。
 
-从源码安装请在仓库内运行 `scripts/ke-install.sh`（需要 Rust 与 Zig 0.15.2）。不要用 `cargo install`：它会装出一个叫 `herdr` 的二进制。
+从源码安装请在仓库内运行 `scripts/ke-install.sh`（需要 Rust 与 `vendor/libghostty-vt/build.zig.zon` 里固定的 Zig 版本，herdr 0.9.1 对应 0.16.0）。不要用 `cargo install`：它会装出一个叫 `herdr` 的二进制。
 
 ## 与 herdr 的隔离
 
