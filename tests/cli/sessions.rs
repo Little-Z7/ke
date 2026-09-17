@@ -279,10 +279,15 @@ fn integration_commands_run_locally_when_server_is_missing() {
         .env("HOME", &home_dir)
         .output()
         .unwrap();
-    assert_eq!(integration_install.status.code(), Some(0));
+    // Modified by ke: ke refuses `integration install` / `uninstall` (it reuses the hooks upstream
+    // herdr installed), so both must fail locally without writing or removing files, while
+    // `integration status` keeps working without a server.
+    assert_eq!(integration_install.status.code(), Some(2));
+    assert!(String::from_utf8_lossy(&integration_install.stderr)
+        .contains("ke does not install or remove agent integrations"));
     assert!(
-        expected_extension.exists(),
-        "integration install should write local files without a server"
+        !expected_extension.exists(),
+        "ke must not write integration files"
     );
 
     let integration_status = Command::new(env!("CARGO_BIN_EXE_herdr"))
@@ -293,8 +298,11 @@ fn integration_commands_run_locally_when_server_is_missing() {
         .unwrap();
     assert_eq!(integration_status.status.code(), Some(0));
     let status_stdout = String::from_utf8_lossy(&integration_status.stdout);
-    assert!(status_stdout.contains("pi: current (v8)"));
+    assert!(status_stdout.contains("pi: not installed"));
     assert!(status_stdout.contains("claude: not installed"));
+
+    // An integration installed by upstream herdr must survive ke's refused uninstall.
+    fs::write(&expected_extension, "// installed by upstream herdr\n").unwrap();
 
     let integration_uninstall = Command::new(env!("CARGO_BIN_EXE_herdr"))
         .args(["integration", "uninstall", "pi"])
@@ -302,10 +310,10 @@ fn integration_commands_run_locally_when_server_is_missing() {
         .env("HOME", &home_dir)
         .output()
         .unwrap();
-    assert_eq!(integration_uninstall.status.code(), Some(0));
+    assert_eq!(integration_uninstall.status.code(), Some(2));
     assert!(
-        !expected_extension.exists(),
-        "integration uninstall should remove local files without a server"
+        expected_extension.exists(),
+        "ke must not remove integration files"
     );
 
     cleanup_test_base(&base);

@@ -69,6 +69,7 @@ git tag ke-v<KE_VERSION> && git push origin ke/main ke-v<KE_VERSION>
 | 2026-09-17 | distribution/ke-install.sh（新增） | curl 安装脚本：从壳的 GitHub Release 下载对应平台二进制，校验 SHA-256，安装为 `ke` |
 | 2026-09-17 | .github/workflows/ke-release.yml（新增） | 发布流程：`ke-v*` 标签触发，构建 linux/macos × x86_64/aarch64 并创建 Release |
 | 2026-09-17 | README.md | 顶部加 fork 声明与壳的安装命令，其余为上游原文 |
+| 2026-09-17 | tests/cli/sessions.rs | `integration_commands_run_locally_when_server_is_missing` 改为断言壳的行为：install / uninstall 返回 2 且不写、不删文件，status 照常可用（`tests/cli` 只在非 macOS 的 unix 上编译，v0 时在 macOS 上没跑到） |
 | 2026-09-17 | docs/next/website/src/data/config-reference.json | 补登记 `keys.toggle_composer`（配置参考与配置模型的一致性检查要求） |
 
 ## 同步上游
