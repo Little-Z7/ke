@@ -1,3 +1,7 @@
+> **This repository is ke (壳), a modified fork of [herdr](https://github.com/herdrdev/herdr).** ke is not herdr and is not affiliated with or endorsed by the herdr project. What ke is, how to install it, and every change relative to upstream are in [FORK.md](FORK.md). Everything below this notice is the unmodified upstream herdr README, kept for reference; its install commands install upstream herdr, not ke.
+>
+> Install ke (macOS and Linux): `curl -fsSL https://github.com/Little-Z7/ke/releases/latest/download/ke-install.sh | sh`
+
 # herdr
 
 

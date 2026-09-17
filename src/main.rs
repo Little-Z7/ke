@@ -606,7 +606,10 @@ fn main() -> io::Result<()> {
 
     if args.iter().any(|a| a == "--help" || a == "-h") {
         platform::begin_cli_output();
-        println!("herdr — terminal workspace manager for AI coding agents");
+        // Modified by ke: say what this binary is. The command lists below keep upstream's
+        // spelling so they stay mergeable; the note tells users to read `herdr` as `ke`.
+        println!("ke (壳) — a modified fork of herdr, the terminal workspace manager for AI coding agents");
+        println!("This binary is installed as `ke`: wherever this help says `herdr <command>`, run `ke <command>`.");
         println!();
         println!("Usage: herdr [options]");
         println!("       herdr --session <name> [options]");
@@ -723,7 +726,12 @@ fn main() -> io::Result<()> {
 
     if args.iter().any(|a| a == "--version" || a == "-V") {
         platform::begin_cli_output();
-        println!("herdr {}", crate::build_info::version());
+        // Modified by ke: report ke's own version and the upstream version it is based on.
+        println!(
+            "ke {} (based on herdr {})",
+            crate::build_info::KE_VERSION,
+            crate::build_info::version()
+        );
         return Ok(());
     }
 

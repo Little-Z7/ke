@@ -830,6 +830,12 @@
           "description": "Toggle sidebar collapse."
         },
         {
+          "key": "keys.toggle_composer",
+          "type": "keybinding",
+          "default": "\"prefix+i\"",
+          "description": "ke only: toggle the composer bar under the focused agent pane."
+        },
+        {
           "key": "keys.indexed.tabs",
           "type": "string",
           "default": "unset",

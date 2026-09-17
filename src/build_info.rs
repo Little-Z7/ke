@@ -2,6 +2,13 @@
 
 pub const BASE_VERSION: &str = env!("CARGO_PKG_VERSION");
 
+// Modified by ke: ke's own release version. BASE_VERSION stays the upstream herdr version ke is
+// based on. Release tags are `ke-v<KE_VERSION>`; the ke release workflow checks they match.
+pub const KE_VERSION: &str = "0.1.0";
+// Modified by ke: where ke releases and the installer live.
+pub const KE_INSTALL_COMMAND: &str =
+    "curl -fsSL https://github.com/Little-Z7/ke/releases/latest/download/ke-install.sh | sh";
+
 pub fn channel() -> &'static str {
     non_empty(option_env!("HERDR_BUILD_CHANNEL")).unwrap_or("stable")
 }

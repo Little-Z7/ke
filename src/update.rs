@@ -2116,9 +2116,10 @@ pub(crate) const KE_DISABLE_SELF_UPDATE: bool = true;
 pub fn self_update(options: SelfUpdateOptions) -> Result<Version, String> {
     if KE_DISABLE_SELF_UPDATE {
         let _ = &options;
-        return Err(
-            "ke does not self-update; install new versions from the ke release channel".into(),
-        );
+        return Err(format!(
+            "ke does not self-update; install the latest release with: {}",
+            crate::build_info::KE_INSTALL_COMMAND
+        ));
     }
     let channel = UpdateChannel::configured();
 
