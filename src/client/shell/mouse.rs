@@ -1897,6 +1897,17 @@ impl ClientShellState {
                     }
                     return;
                 }
+                // Modified by ke: a coordinator panel row with `input` fills the composer bar.
+                if let Some(input) = self
+                    .hits
+                    .ke_panel_rows
+                    .iter()
+                    .find(|(rect, _)| super::contains(*rect, point))
+                    .map(|(_, input)| input.clone())
+                {
+                    self.composer_open_with(&input, outcome);
+                    return;
+                }
                 if super::contains(self.hits.agent_sort_toggle, point) {
                     let sort = match self.config.agent_panel_sort {
                         crate::config::AgentPanelSortConfig::Spaces => {

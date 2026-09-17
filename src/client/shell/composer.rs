@@ -27,6 +27,9 @@ pub(super) struct ComposerRequest<'a> {
     pub(super) pane_id: &'a str,
     pub(super) agent: Option<&'a str>,
     pub(super) text: &'a str,
+    /// Processor socket resolved from `[ke] composer_socket` / `KE_COMPOSER_SOCKET`; `None` means
+    /// no processor is configured and the text passes through unchanged.
+    pub(super) socket: Option<&'a std::path::Path>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -57,26 +60,14 @@ pub(super) struct ComposerPending {
     started: std::time::Instant,
 }
 
-pub(super) fn composer_socket_path() -> Option<std::path::PathBuf> {
-    if let Some(path) = std::env::var_os("KE_COMPOSER_SOCKET").filter(|value| !value.is_empty()) {
-        return Some(std::path::PathBuf::from(path));
-    }
-    let home = std::env::var_os("HOME")?;
-    let path = std::path::PathBuf::from(home)
-        .join(".workcat")
-        .join("ke")
-        .join("composer.sock");
-    path.exists().then_some(path)
-}
-
 pub(super) fn call_composer_hook(request: &ComposerRequest<'_>) -> ComposerReply {
-    let Some(path) = composer_socket_path() else {
+    let Some(path) = request.socket else {
         return ComposerReply::Send {
             text: request.text.to_owned(),
             note: None,
         };
     };
-    match exchange(&path, request) {
+    match exchange(path, request) {
         Ok(reply) => reply,
         Err(err) => ComposerReply::Block {
             note: format!("处理进程不可用（{err}），未发送"),
@@ -159,6 +150,20 @@ impl ClientShellState {
         }
         outcome.repaint = true;
         outcome.resize = true;
+    }
+
+    /// Opens the bar if needed and replaces its text (coordinator panel click). The text is not
+    /// sent: the user still reviews it and presses Enter, so it goes through the processor as usual.
+    pub(super) fn composer_open_with(&mut self, text: &str, outcome: &mut ClientShellInput) {
+        if self.composer.is_none() {
+            self.toggle_composer(outcome);
+        }
+        if let Some(composer) = self.composer.as_mut() {
+            composer.input.clear();
+            composer.notice = None;
+        }
+        self.composer_insert(text);
+        outcome.repaint = true;
     }
 
     pub(super) fn composer_insert(&mut self, text: &str) {
@@ -285,14 +290,17 @@ impl ClientShellState {
         // The processor runs off the input path: a fast reply finishes here, a slow one is picked up
         // by `tick_composer` from the main-loop timer, so the UI never blocks on the socket.
         let hook = self.composer_hook;
+        // Resolved per submit so a processor started after ke launched is picked up.
+        let socket = self.config.ke.composer_socket_path();
         let (tx, rx) = std::sync::mpsc::channel();
-        let job = (pane_id.clone(), agent.clone(), text.clone());
+        let job = (pane_id.clone(), agent.clone(), text.clone(), socket);
         std::thread::spawn(move || {
-            let (pane_id, agent, text) = job;
+            let (pane_id, agent, text, socket) = job;
             let _ = tx.send(hook(&ComposerRequest {
                 pane_id: &pane_id,
                 agent: agent.as_deref(),
                 text: &text,
+                socket: socket.as_deref(),
             }));
         });
         match rx.recv_timeout(SYNC_WAIT) {

@@ -228,6 +228,15 @@ const DEFAULT_CONFIG: &str = r##"# herdr configuration
 # [worktrees]
 # directory = "~/.ke/worktrees"
 
+# ke only: where the shell finds the ke processes. Environment variables
+# (KE_COMPOSER_SOCKET, KE_PANEL_FILE, WORKCAT_KE_HOME) override these keys.
+# [ke]
+# Composer processor socket. Set: a failing processor blocks sends.
+# Unset: ~/.workcat/ke/composer.sock while it exists, otherwise text passes through unchanged.
+# composer_socket = "~/.workcat/ke/composer.sock"
+# panel.json written by the ke coordinator for the sidebar panel.
+# panel_file = "~/.workcat/ke/panel.json"
+
 [ui]
 # Sidebar width (auto-scaled based on workspace names, this sets the default)
 # sidebar_width = 26

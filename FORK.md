@@ -17,7 +17,7 @@ curl -fsSL https://github.com/Little-Z7/ke/releases/latest/download/ke-install.s
 
 - 装到 `~/.local/bin/ke`（`KE_INSTALL_DIR` 可改），下载后按发布里的 `SHA256SUMS` 校验。`KE_RELEASE_TAG=ke-v0.1.0` 可指定版本。更新就是重新运行一次。
 - 壳不自带 agent 状态钩子的安装：它复用上游 herdr 为各 CLI 装好的钩子（钩子按窗格里的 `HERDR_SOCKET_PATH` 找 socket，在壳的窗格里就会连到壳）。需要钩子的话先装上游 herdr 并执行 `herdr integration install <agent>`；没有钩子时壳退回到基于屏幕内容的状态检测。
-- 输入栏的本机处理进程（脱敏等）和侧栏面板的协调进程不在本仓库里。没有它们时输入栏原文直通，侧栏 ke 面板不显示。
+- 输入栏的本机处理进程（脱敏等）和侧栏面板的协调进程不在本仓库里。没有它们时输入栏原文直通，侧栏 ke 面板不显示。两者的路径默认在 `~/.workcat/ke/` 下，可用 `config.toml` 的 `[ke]` 段（`composer_socket`、`panel_file`）或环境变量（`KE_COMPOSER_SOCKET`、`KE_PANEL_FILE` / `WORKCAT_KE_HOME`）修改。协议与用法见 `docs/next/website/src/content/docs/ke.mdx`（中文版 `zh-cn/ke.mdx`）。
 - 从源码安装：`scripts/ke-install.sh`（需要 Rust 与 Zig 0.15.2）。
 
 ## 发布
@@ -72,6 +72,18 @@ git tag ke-v<KE_VERSION> && git push origin ke/main ke-v<KE_VERSION>
 | 2026-09-17 | tests/cli/sessions.rs | `integration_commands_run_locally_when_server_is_missing` 改为断言壳的行为：install / uninstall 返回 2 且不写、不删文件，status 照常可用（`tests/cli` 只在非 macOS 的 unix 上编译，v0 时在 macOS 上没跑到） |
 | 2026-09-17 | docs/next/website/src/data/config-reference.json | 补登记 `keys.toggle_composer`（配置参考与配置模型的一致性检查要求） |
 | 2026-09-17 | .github/dependabot.yml（删除） | 壳跟随上游的依赖版本，不单独升级；上游的 Dependabot 配置在壳的仓库里只会开无关的 PR 并触发上游 CI |
+| 2026-09-17 | src/config/model.rs | 新增 `[ke]` 配置段（`KeConfig`：`composer_socket`、`panel_file`）与路径解析（环境变量 > 配置 > 默认 `~/.workcat/ke/`，`~` 展开）；`Config` 加 `ke` 字段；3 个测试 |
+| 2026-09-17 | src/config/io.rs、src/config.rs | `ke` 加入已知顶层段并按 live section 加载；导出 `KeConfig` |
+| 2026-09-17 | src/client/shell/state.rs | `ClientShellConfig` 加 `ke`；面板数据源按配置路径构造；命中表加 `ke_panel_rows` |
+| 2026-09-17 | src/client/shell/config.rs | `from_config` / `apply_live_config` 带上 `[ke]`；配置重载时重新指向面板文件 |
+| 2026-09-17 | src/client/shell/composer.rs | 处理进程 socket 改为每次提交时按 `[ke] composer_socket` 解析并随请求传入钩子；新增 `composer_open_with`（面板点击打开输入栏并填入文字） |
+| 2026-09-17 | src/client/shell/ke_panel.rs | 面板行可选 `input` 字段（控制字符替换、2000 字符上限、空白丢弃）；带 `input` 的行加下划线并返回点击区域；数据源改为传入路径、支持重载后改路径、路径为空时隐藏已显示的面板；4 个测试更新/新增 |
+| 2026-09-17 | src/client/shell/sidebar.rs、src/client/shell/endpoint_sidebar.rs、src/client/shell/render.rs | 渲染面板时把点击区域写入命中表；关闭鼠标捕获时清空 |
+| 2026-09-17 | src/client/shell/mouse.rs | 左键点到带 `input` 的面板行：打开输入栏并填入文字，不发送 |
+| 2026-09-17 | src/client/shell/tests/composer_bar.rs | 新增面板点击测试 |
+| 2026-09-17 | src/main.rs | 默认配置模板加注释掉的 `[ke]` 段 |
+| 2026-09-17 | docs/next/website/src/data/config-reference.json | 新增 `ke` 段：`ke.composer_socket`、`ke.panel_file` |
+| 2026-09-17 | docs/next/website/src/content/docs/ke.mdx、zh-cn/ke.mdx、ja/ke.mdx（新增） | 壳的用户文档：安装、与 herdr 的隔离、输入栏与处理进程协议、侧栏面板与 panel.json 格式、`[ke]` 配置、限制 |
 
 ## 同步上游
 

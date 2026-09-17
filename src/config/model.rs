@@ -321,6 +321,87 @@ pub struct Config {
     pub advanced: AdvancedConfig,
     pub experimental: ExperimentalConfig,
     pub remote: RemoteConfig,
+    /// Modified by ke: paths the shell uses to reach the ke processes.
+    pub ke: KeConfig,
+}
+
+/// Modified by ke: where the shell finds the composer processor and the coordinator's panel file.
+/// Environment variables win over these keys; unset keys fall back to `~/.workcat/ke/`.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Deserialize)]
+#[serde(default)]
+pub struct KeConfig {
+    /// Unix socket of the composer processor (redaction / resident model). `KE_COMPOSER_SOCKET`
+    /// overrides it. When set, a failing processor blocks sends; unset uses
+    /// `~/.workcat/ke/composer.sock` only while that socket exists, otherwise text passes through unchanged.
+    pub composer_socket: Option<String>,
+    /// `panel.json` written by the ke coordinator for the sidebar panel. `KE_PANEL_FILE` and
+    /// `WORKCAT_KE_HOME` override it. Unset: `~/.workcat/ke/panel.json`.
+    pub panel_file: Option<String>,
+}
+
+impl KeConfig {
+    /// Resolves the composer socket with precedence env > config > default, expanding `~`.
+    /// `None` means no processor: the composer sends text unchanged.
+    pub fn composer_socket_path(&self) -> Option<std::path::PathBuf> {
+        Self::composer_socket_from(
+            std::env::var_os("KE_COMPOSER_SOCKET"),
+            self.composer_socket.as_deref(),
+            std::env::var_os("HOME"),
+            |path| path.exists(),
+        )
+    }
+
+    fn composer_socket_from(
+        env_socket: Option<std::ffi::OsString>,
+        configured: Option<&str>,
+        home: Option<std::ffi::OsString>,
+        exists: impl Fn(&std::path::Path) -> bool,
+    ) -> Option<std::path::PathBuf> {
+        if let Some(path) = env_socket.filter(|value| !value.is_empty()) {
+            return Some(std::path::PathBuf::from(path));
+        }
+        if let Some(path) = configured.map(str::trim).filter(|value| !value.is_empty()) {
+            return Some(crate::worktree::expand_tilde_path(path));
+        }
+        let path = std::path::PathBuf::from(home?)
+            .join(".workcat")
+            .join("ke")
+            .join("composer.sock");
+        exists(&path).then_some(path)
+    }
+
+    /// Resolves the panel file with precedence env > config > default, expanding `~`.
+    pub fn panel_file_path(&self) -> Option<std::path::PathBuf> {
+        Self::panel_file_from(
+            std::env::var_os("KE_PANEL_FILE"),
+            std::env::var_os("WORKCAT_KE_HOME"),
+            self.panel_file.as_deref(),
+            std::env::var_os("HOME"),
+        )
+    }
+
+    fn panel_file_from(
+        env_file: Option<std::ffi::OsString>,
+        env_home: Option<std::ffi::OsString>,
+        configured: Option<&str>,
+        home: Option<std::ffi::OsString>,
+    ) -> Option<std::path::PathBuf> {
+        if let Some(path) = env_file.filter(|value| !value.is_empty()) {
+            return Some(std::path::PathBuf::from(path));
+        }
+        if let Some(dir) = env_home.filter(|value| !value.is_empty()) {
+            return Some(std::path::PathBuf::from(dir).join("panel.json"));
+        }
+        if let Some(path) = configured.map(str::trim).filter(|value| !value.is_empty()) {
+            return Some(crate::worktree::expand_tilde_path(path));
+        }
+        Some(
+            std::path::PathBuf::from(home?)
+                .join(".workcat")
+                .join("ke")
+                .join("panel.json"),
+        )
+    }
 }
 
 #[derive(Debug)]
@@ -1543,6 +1624,96 @@ directory = "~/Projects/herdr-worktrees"
 "#;
         let config: Config = toml::from_str(toml).unwrap();
         assert_eq!(config.worktrees.directory, "~/Projects/herdr-worktrees");
+    }
+
+    // Modified by ke: [ke] section parsing and path precedence.
+    #[test]
+    fn ke_section_defaults_to_unset_and_parses() {
+        let default_config = Config::default();
+        assert_eq!(default_config.ke.composer_socket, None);
+        assert_eq!(default_config.ke.panel_file, None);
+
+        let toml = r#"
+[ke]
+composer_socket = "~/run/ke.sock"
+panel_file = "/srv/ke/panel.json"
+"#;
+        let config: Config = toml::from_str(toml).unwrap();
+        assert_eq!(config.ke.composer_socket.as_deref(), Some("~/run/ke.sock"));
+        assert_eq!(config.ke.panel_file.as_deref(), Some("/srv/ke/panel.json"));
+    }
+
+    #[test]
+    fn ke_composer_socket_prefers_env_then_config_then_existing_default() {
+        use std::path::{Path, PathBuf};
+        let home = Some(std::ffi::OsString::from("/home/me"));
+        let default_socket = PathBuf::from("/home/me/.workcat/ke/composer.sock");
+
+        assert_eq!(
+            KeConfig::composer_socket_from(
+                Some("/tmp/env.sock".into()),
+                Some("/tmp/cfg.sock"),
+                home.clone(),
+                |_| false
+            ),
+            Some(PathBuf::from("/tmp/env.sock")),
+            "env wins over config"
+        );
+        assert_eq!(
+            KeConfig::composer_socket_from(
+                Some(std::ffi::OsString::new()),
+                Some(" /tmp/cfg.sock "),
+                home.clone(),
+                |_| false
+            ),
+            Some(PathBuf::from("/tmp/cfg.sock")),
+            "empty env is ignored, configured path is used even when missing"
+        );
+        assert_eq!(
+            KeConfig::composer_socket_from(None, Some(""), home.clone(), |path| path
+                == Path::new(&default_socket)),
+            Some(default_socket.clone()),
+            "blank config falls back to the default when it exists"
+        );
+        assert_eq!(
+            KeConfig::composer_socket_from(None, None, home, |_| false),
+            None,
+            "missing default means no processor"
+        );
+    }
+
+    #[test]
+    fn ke_panel_file_prefers_env_then_config_then_default() {
+        use std::path::PathBuf;
+        let home = Some(std::ffi::OsString::from("/home/me"));
+
+        assert_eq!(
+            KeConfig::panel_file_from(
+                Some("/tmp/panel.json".into()),
+                Some("/tmp/kehome".into()),
+                Some("/tmp/cfg.json"),
+                home.clone()
+            ),
+            Some(PathBuf::from("/tmp/panel.json"))
+        );
+        assert_eq!(
+            KeConfig::panel_file_from(
+                None,
+                Some("/tmp/kehome".into()),
+                Some("/tmp/cfg.json"),
+                home.clone()
+            ),
+            Some(PathBuf::from("/tmp/kehome/panel.json"))
+        );
+        assert_eq!(
+            KeConfig::panel_file_from(None, None, Some("/tmp/cfg.json"), home.clone()),
+            Some(PathBuf::from("/tmp/cfg.json"))
+        );
+        assert_eq!(
+            KeConfig::panel_file_from(None, None, None, home),
+            Some(PathBuf::from("/home/me/.workcat/ke/panel.json"))
+        );
+        assert_eq!(KeConfig::panel_file_from(None, None, None, None), None);
     }
 
     #[test]

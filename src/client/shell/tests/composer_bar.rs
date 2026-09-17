@@ -244,6 +244,64 @@ fn slow_processor_completes_from_the_timer_and_keeps_new_typing() {
     );
 }
 
+fn click(state: &mut ClientShellState, column: u16, row: u16) -> ClientShellInput {
+    state.handle_raw_events(vec![RawInputEvent::Mouse(MouseEvent {
+        kind: MouseEventKind::Down(MouseButton::Left),
+        column,
+        row,
+        modifiers: KeyModifiers::NONE,
+    })])
+}
+
+#[test]
+fn clicking_a_panel_row_with_input_opens_the_composer_prefilled() {
+    let mut state = ClientShellState::new(ClientShellConfig::from_config(&Config::default()));
+    state.set_snapshot(Box::new(snapshot()));
+    state.set_pane_surface(surface());
+    let (panel, _) = super::super::ke_panel::parse_panel(
+        r#"{"ts":1.0,"title":"ke","rows":[
+            {"text":"claude ok","level":"ok"},
+            {"text":"继续上一个任务","level":"info","input":"@ke 继续"}
+        ]}"#,
+    )
+    .expect("panel");
+    state.ke_panel.set_panel_for_test(Some(panel));
+    state.compose(120, 40).expect("frame");
+    let [(rect, input)] = &state.hits.ke_panel_rows[..] else {
+        panic!(
+            "exactly one clickable panel row, got {:?}",
+            state.hits.ke_panel_rows
+        );
+    };
+    assert_eq!(input, "@ke 继续");
+    let (rect, plain_row) = (*rect, rect.y - 1);
+    assert!(state.composer.is_none());
+
+    let out = click(&mut state, rect.x + 1, plain_row);
+    assert!(state.composer.is_none(), "display-only rows do nothing");
+    assert_eq!(pane_input_requests(&out), 0);
+
+    let out = click(&mut state, rect.x + 1, rect.y);
+    assert!(out.repaint && out.resize, "the bar opens");
+    assert_eq!(pane_input_requests(&out), 0, "nothing is sent by the click");
+    assert!(out.actions.is_empty());
+    assert_eq!(
+        state.composer.as_ref().map(|c| c.input.as_str()),
+        Some("@ke 继续")
+    );
+
+    state.compose(120, 40).expect("frame with composer");
+    let (rect, _) = state.hits.ke_panel_rows[0].clone();
+    state.handle_input_bytes(b" now");
+    let out = click(&mut state, rect.x + 1, rect.y);
+    assert!(!out.resize, "already open: only the text changes");
+    assert_eq!(
+        state.composer.as_ref().map(|c| c.input.as_str()),
+        Some("@ke 继续"),
+        "a click replaces what was in the bar"
+    );
+}
+
 #[test]
 fn unresponsive_processor_times_out_as_a_block() {
     let mut state = state_with_composer(Some("claude"), fake_hung);

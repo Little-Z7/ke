@@ -1434,6 +1434,24 @@
       ]
     },
     {
+      "id": "ke",
+      "title": "ke (壳)",
+      "keys": [
+        {
+          "key": "ke.composer_socket",
+          "type": "string",
+          "default": "unset",
+          "description": "ke only: Unix socket of the composer processor. `KE_COMPOSER_SOCKET` overrides it. Set: a failing processor blocks sends. Unset: `~/.workcat/ke/composer.sock` while it exists, otherwise text passes through unchanged."
+        },
+        {
+          "key": "ke.panel_file",
+          "type": "string",
+          "default": "unset",
+          "description": "ke only: `panel.json` written by the ke coordinator for the sidebar panel. `KE_PANEL_FILE` and `WORKCAT_KE_HOME` override it. Unset: `~/.workcat/ke/panel.json`."
+        }
+      ]
+    },
+    {
       "id": "remote",
       "title": "Remote",
       "keys": [

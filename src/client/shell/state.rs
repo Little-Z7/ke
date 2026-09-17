@@ -107,6 +107,8 @@ pub(crate) struct ClientShellConfig {
     pub(super) preferences: preferences::ClientChromePreferences,
     pub(super) startup_config_diagnostic: Option<String>,
     pub(super) startup_onboarding: bool,
+    // Modified by ke: [ke] section; paths are resolved (env > config > default) when used.
+    pub(super) ke: crate::config::KeConfig,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -156,6 +158,8 @@ pub(super) struct ShellHitMap {
     pub(super) agent_scroll_metrics: Option<crate::pane::ScrollMetrics>,
     pub(super) agent_max_scroll: usize,
     pub(super) agent_sort_toggle: Rect,
+    /// Modified by ke: clickable coordinator panel rows and the composer text each one carries.
+    pub(super) ke_panel_rows: Vec<(Rect, String)>,
     pub(super) sidebar_divider: Rect,
     pub(super) sidebar_section_divider: Rect,
     pub(super) sidebar_toggle: Rect,
@@ -1036,6 +1040,7 @@ impl ClientShellState {
         if let Some(sort) = preferences.agent_panel_sort {
             config.agent_panel_sort = sort;
         }
+        let ke_panel = super::ke_panel::KePanelSource::new(config.ke.panel_file_path()); // Modified by ke
         Self {
             config,
             snapshot: None,
@@ -1104,7 +1109,7 @@ impl ClientShellState {
             composer: None,
             composer_hook: super::composer::call_composer_hook,
             composer_pending: None, // Modified by ke
-            ke_panel: super::ke_panel::KePanelSource::from_env(), // Modified by ke
+            ke_panel,               // Modified by ke
             popup_pending_deadline: None,
             next_request_id: 1,
             pending_requests: HashMap::new(),

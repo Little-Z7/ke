@@ -3,6 +3,10 @@
 // The coordinator (`workcat ke coord`) writes `panel.json` next to its state
 // file. The client re-reads it from the main-loop timer only when the file's
 // mtime changes, so rendering stays a pure function of in-memory state.
+//
+// A row may carry `"input"`: clicking that row opens the composer bar and puts
+// the text there, so the coordinator can offer actions (e.g. `@ke 继续`) that
+// still travel through the processor like anything the user types.
 
 use std::path::PathBuf;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
@@ -23,6 +27,8 @@ pub(super) const KE_PANEL_STALE_SECS: f64 = 30.0;
 pub(super) const KE_PANEL_HIDE_SECS: f64 = 600.0;
 pub(super) const KE_PANEL_MAX_ROWS: usize = 12;
 const KE_PANEL_MAX_FILE_BYTES: u64 = 64 * 1024;
+/// Longest `input` a row may put into the composer.
+const KE_PANEL_MAX_INPUT_CHARS: usize = 2000;
 /// The agents section keeps at least this many rows.
 const KE_PANEL_MIN_AGENT_ROWS: u16 = 4;
 
@@ -61,6 +67,8 @@ impl KePanelLevel {
 pub(super) struct KePanelRow {
     pub(super) text: String,
     pub(super) level: KePanelLevel,
+    /// Text a click puts into the composer bar; rows without it are display only.
+    pub(super) input: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
@@ -73,7 +81,10 @@ pub(super) struct KePanel {
 /// Parses `panel.json`; returns the panel and its write timestamp (unix secs).
 ///
 /// ```json
-/// {"v":1,"ts":1726200000.0,"title":"ke","rows":[{"text":"claude ok 5h 34%","level":"ok"}]}
+/// {"v":1,"ts":1726200000.0,"title":"ke","rows":[
+///   {"text":"claude ok 5h 34%","level":"ok"},
+///   {"text":"继续上一个任务","level":"info","input":"@ke 继续"}
+/// ]}
 /// ```
 pub(super) fn parse_panel(text: &str) -> Option<(KePanel, f64)> {
     let value: serde_json::Value = serde_json::from_str(text).ok()?;
@@ -99,9 +110,21 @@ pub(super) fn parse_panel(text: &str) -> Option<(KePanel, f64)> {
                         .map(|ch| if ch.is_control() { ' ' } else { ch })
                         .take(120)
                         .collect();
+                    let input = row
+                        .get("input")
+                        .and_then(|input| input.as_str())
+                        .map(|input| {
+                            input
+                                .chars()
+                                .map(|ch| if ch.is_control() { ' ' } else { ch })
+                                .take(KE_PANEL_MAX_INPUT_CHARS)
+                                .collect::<String>()
+                        })
+                        .filter(|input| !input.trim().is_empty());
                     Some(KePanelRow {
                         text,
                         level: KePanelLevel::parse(row.get("level").and_then(|l| l.as_str())),
+                        input,
                     })
                 })
                 .take(KE_PANEL_MAX_ROWS)
@@ -129,25 +152,6 @@ pub(super) fn visible_panel(parsed: &KePanel, ts: f64, now_epoch: f64) -> Option
     Some(panel)
 }
 
-pub(super) fn ke_panel_path() -> Option<PathBuf> {
-    if cfg!(test) {
-        return None;
-    }
-    if let Some(path) = std::env::var_os("KE_PANEL_FILE").filter(|value| !value.is_empty()) {
-        return Some(PathBuf::from(path));
-    }
-    if let Some(home) = std::env::var_os("WORKCAT_KE_HOME").filter(|value| !value.is_empty()) {
-        return Some(PathBuf::from(home).join("panel.json"));
-    }
-    let home = std::env::var_os("HOME")?;
-    Some(
-        PathBuf::from(home)
-            .join(".workcat")
-            .join("ke")
-            .join("panel.json"),
-    )
-}
-
 #[derive(Debug, Clone, Default)]
 pub(super) struct KePanelSource {
     path: Option<PathBuf>,
@@ -158,21 +162,39 @@ pub(super) struct KePanelSource {
 }
 
 impl KePanelSource {
-    pub(super) fn from_env() -> Self {
+    /// `path` comes from `KeConfig::panel_file_path()`; tests never watch the real file.
+    pub(super) fn new(path: Option<PathBuf>) -> Self {
         Self {
-            path: ke_panel_path(),
+            path: if cfg!(test) { None } else { path },
             ..Self::default()
         }
+    }
+
+    /// Re-points the source (live config reload). The visible panel is kept until the next tick so
+    /// that tick can report a repaint when the new file shows something different.
+    pub(super) fn set_path(&mut self, path: Option<PathBuf>) {
+        if cfg!(test) || self.path == path {
+            return;
+        }
+        self.path = path;
+        self.next_check = None;
+        self.mtime = None;
+        self.parsed = None;
     }
 
     pub(super) fn panel(&self) -> Option<&KePanel> {
         self.panel.as_ref()
     }
 
+    #[cfg(test)]
+    pub(super) fn set_panel_for_test(&mut self, panel: Option<KePanel>) {
+        self.panel = panel;
+    }
+
     /// Returns true when the visible panel changed and the shell should repaint.
     pub(super) fn tick(&mut self, now: Instant) -> bool {
         let Some(path) = self.path.as_ref() else {
-            return false;
+            return self.panel.take().is_some();
         };
         if self.next_check.is_some_and(|deadline| now < deadline) {
             return false;
@@ -228,9 +250,17 @@ pub(super) fn split_detail(area: Rect, panel: Option<&KePanel>) -> (Rect, Rect) 
     )
 }
 
-pub(super) fn render_ke_panel(buffer: &mut Buffer, area: Rect, panel: &KePanel, palette: &Palette) {
+/// Draws the panel and returns the click targets: one `(rect, input)` per visible row that carries
+/// an `input`. Callers store them in the hit map so the mouse handler can find them.
+pub(super) fn render_ke_panel(
+    buffer: &mut Buffer,
+    area: Rect,
+    panel: &KePanel,
+    palette: &Palette,
+) -> Vec<(Rect, String)> {
+    let mut targets = Vec::new();
     if area.is_empty() {
-        return;
+        return targets;
     }
     let header = if panel.stale {
         format!(" {} · offline", panel.title)
@@ -253,20 +283,24 @@ pub(super) fn render_ke_panel(buffer: &mut Buffer, area: Rect, panel: &KePanel, 
         .take(area.height.saturating_sub(1) as usize)
         .enumerate()
     {
-        let style = if panel.stale {
+        let mut style = if panel.stale {
             KePanelLevel::Dim.style(palette)
         } else {
             row.level.style(palette)
         };
-        put_text(
-            buffer,
+        let rect = Rect::new(
             area.x.saturating_add(1),
             area.y + 1 + index as u16,
             area.width.saturating_sub(1),
-            &row.text,
-            style,
+            1,
         );
+        if let Some(input) = row.input.as_ref() {
+            style = style.add_modifier(Modifier::UNDERLINED);
+            targets.push((rect, input.clone()));
+        }
+        put_text(buffer, rect.x, rect.y, rect.width, &row.text, style);
     }
+    targets
 }
 
 #[cfg(test)]
@@ -276,8 +310,8 @@ mod tests {
     /// "ESC" is swapped for a JSON-escaped control character at test time.
     const SAMPLE: &str = r#"{"v":1,"ts":1000.0,"title":"ke","rows":[
         {"text":"claude ok 5h 34%","level":"ok"},
-        {"text":"codex limited","level":"warn"},
-        {"text":"badESC[31m","level":"nope"},
+        {"text":"codex limited","level":"warn","input":"@ke ESCcodex 怎么了"},
+        {"text":"badESC[31m","level":"nope","input":"   "},
         {"level":"ok"}
     ]}"#;
 
@@ -297,6 +331,30 @@ mod tests {
         assert!(!panel.rows[2].text.chars().any(char::is_control));
         assert!(parse_panel("{}").is_none(), "ts is required");
         assert!(parse_panel("not json").is_none());
+    }
+
+    #[test]
+    fn parse_panel_keeps_row_input_sanitized_and_drops_blank_input() {
+        let (panel, _) = parse_panel(&sample()).unwrap();
+        assert_eq!(panel.rows[0].input, None, "display-only row");
+        assert_eq!(
+            panel.rows[1].input.as_deref(),
+            Some("@ke  codex 怎么了"),
+            "control characters become spaces"
+        );
+        assert_eq!(panel.rows[2].input, None, "blank input is display only");
+        let long = format!(
+            r#"{{"ts":1.0,"rows":[{{"text":"t","input":"{}"}}]}}"#,
+            "x".repeat(KE_PANEL_MAX_INPUT_CHARS + 50)
+        );
+        let (panel, _) = parse_panel(&long).unwrap();
+        assert_eq!(
+            panel.rows[0]
+                .input
+                .as_ref()
+                .map(|input| input.chars().count()),
+            Some(KE_PANEL_MAX_INPUT_CHARS)
+        );
     }
 
     #[test]
@@ -344,17 +402,34 @@ mod tests {
                 .collect()
         };
         let mut buffer = Buffer::empty(area);
-        render_ke_panel(&mut buffer, area, &panel, &palette);
+        let targets = render_ke_panel(&mut buffer, area, &panel, &palette);
         assert!(line(&buffer, 0).starts_with(" ke"));
         assert!(line(&buffer, 1).starts_with(" claude ok 5h 34%"));
         assert_eq!(buffer[(1, 1)].fg, palette.green);
         assert_eq!(buffer[(1, 2)].fg, palette.yellow);
+        assert!(
+            !buffer[(1, 1)].modifier.contains(Modifier::UNDERLINED),
+            "display-only rows are not underlined"
+        );
+        assert!(
+            buffer[(1, 2)].modifier.contains(Modifier::UNDERLINED),
+            "clickable rows are underlined"
+        );
+        assert_eq!(
+            targets,
+            vec![(Rect::new(1, 2, 23, 1), "@ke  codex 怎么了".to_owned())],
+            "only the row with input is a click target, on its own screen row"
+        );
 
         panel.stale = true;
         let mut buffer = Buffer::empty(area);
-        render_ke_panel(&mut buffer, area, &panel, &palette);
+        let targets = render_ke_panel(&mut buffer, area, &panel, &palette);
         assert!(line(&buffer, 0).starts_with(" ke · offline"));
         assert_eq!(buffer[(1, 1)].fg, palette.overlay0);
+        assert_eq!(targets.len(), 1, "stale rows stay clickable");
+        assert!(
+            render_ke_panel(&mut Buffer::empty(area), Rect::default(), &panel, &palette).is_empty()
+        );
     }
 
     #[test]
@@ -362,6 +437,16 @@ mod tests {
         let mut source = KePanelSource::default();
         assert!(!source.tick(Instant::now()));
         assert!(source.panel().is_none());
+    }
+
+    #[test]
+    fn source_losing_its_path_hides_the_panel_once() {
+        let (panel, _) = parse_panel(&sample()).unwrap();
+        let mut source = KePanelSource::default();
+        source.set_panel_for_test(Some(panel));
+        assert!(source.tick(Instant::now()), "hiding the panel repaints");
+        assert!(source.panel().is_none());
+        assert!(!source.tick(Instant::now()));
     }
 
     #[test]

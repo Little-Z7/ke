@@ -72,6 +72,8 @@ impl ClientShellState {
                 if self.agent_panel_sort_manual {
                     self.config.agent_panel_sort = agent_panel_sort;
                 }
+                // Modified by ke: follow a changed [ke] panel_file without restarting.
+                self.ke_panel.set_path(self.config.ke.panel_file_path());
                 self.set_local_config_diagnostic(self.config.local_config_diagnostic(&diagnostics));
                 if let Some(snapshot) = self.snapshot.as_deref() {
                     let profile = snapshot.server_keybindings_toml.clone();
@@ -142,6 +144,7 @@ impl ClientShellConfig {
             preferences: preferences::ClientChromePreferences::default(),
             startup_config_diagnostic: None,
             startup_onboarding: false,
+            ke: config.ke.clone(), // Modified by ke
         }
     }
 
@@ -335,6 +338,9 @@ impl ClientShellConfig {
         if !invalid_section("experimental") {
             self.switch_ascii_input_source_in_prefix =
                 config.experimental.switch_ascii_input_source_in_prefix;
+        }
+        if !invalid_section("ke") {
+            self.ke = config.ke.clone(); // Modified by ke
         }
 
         diagnostics

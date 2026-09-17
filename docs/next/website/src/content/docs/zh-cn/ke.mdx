@@ -1,0 +1,120 @@
+---
+title: 壳（ke）
+description: Herdr 的修改版“壳”——输入栏、协调面板，以及壳如何与已安装的 herdr 互不干扰。
+---
+
+壳（ke）是 Herdr 的修改版。它保留了 Herdr 的运行时、窗格和智能体检测，并为一个住在 coding agent 旁边的常驻模型加了两个挂点：
+
+- 焦点窗格下方的**输入栏**：发给智能体的文字先经过本机处理进程（脱敏，或把 `@ke` 开头的内容交给常驻模型），再进入 CLI；
+- 由 ke 协调进程写入的**侧栏面板**：各 CLI 的额度、任务和常驻模型的状态一直显示在智能体列表旁边。
+
+处理进程和协调进程是独立的程序，壳只定义它们如何接入。没有它们时，输入栏原文直通、面板隐藏，壳的行为与 Herdr 一致。
+
+内置帮助里写 `herdr <command>` 的地方，都改为运行 `ke <command>`。
+
+## 安装
+
+macOS 与 Linux（x86_64 / aarch64）：
+
+```bash
+curl -fsSL https://github.com/Little-Z7/ke/releases/latest/download/ke-install.sh | sh
+```
+
+脚本会按发布中的 `SHA256SUMS` 校验后安装到 `~/.local/bin/ke`（`KE_INSTALL_DIR` 可改）。设置 `KE_RELEASE_TAG=ke-v0.1.0` 可固定版本。更新就是再运行一次；`ke update` 会有意拒绝，并把这条命令打印出来。
+
+从源码安装请在仓库内运行 `scripts/ke-install.sh`（需要 Rust 与 Zig 0.15.2）。不要用 `cargo install`：它会装出一个叫 `herdr` 的二进制。
+
+## 与 herdr 的隔离
+
+壳可以和上游 Herdr 装在同一台机器上而互不干扰：
+
+- 配置、socket、会话、日志和插件放在 `ke` 应用目录下（调试构建为 `ke-dev`），而不是 `herdr`。
+- 自更新与 `ke integration install` / `uninstall` 均已禁用。壳复用 `herdr integration install <agent>` 已装进各 CLI 的状态钩子：钩子通过 `HERDR_SOCKET_PATH` 找 socket，而壳的窗格里这个变量指向壳自己的 socket。没有钩子时，壳退回到基于屏幕内容的状态检测。
+- 壳启动的窗格在 Herdr 的 `HERDR_ENV=1` 之外还带 `KE_ENV=1`。
+- 在上游 Herdr 窗格里启动 `ke`（有 `HERDR_ENV=1`、无 `KE_ENV`）时，会先清掉继承的 `HERDR_*` 定位变量，因此壳不会误连 Herdr 的服务端，也不会触发 Herdr 的禁止嵌套守卫。
+
+## 输入栏
+
+按 `prefix+i`（可通过 `keys.toggle_composer` 修改）在窗格区下方打开一个两行的输入栏。打开期间，键入和粘贴的文字进入输入栏而不是焦点窗格。
+
+- **Enter** 把文字交给处理进程，再把回复提交到焦点窗格：智能体窗格用 `agent.prompt`，普通终端用 `pane.send_input` 并附带 Enter。
+- **Esc** 或 **Ctrl+U** 清空输入栏；**Backspace** 删除。
+- 输入栏为**空**时，Enter、Esc、Backspace 仍然透传给窗格，智能体自己的确认提示和中断照常可用。
+- 状态行显示目标窗格和处理进程最近一次的说明。提交仍在处理时新键入的文字会保留。
+
+输入栏从不自行发送。点击面板行（见下）只是填入文字，仍需你按 Enter。
+
+### 处理进程协议
+
+处理进程监听一个 Unix socket。每次提交时壳建立连接，写入一行 JSON，再读回一行 JSON：
+
+```json
+{"pane_id":"wA:p2","agent":"claude","text":"deploy with key sk-live-..."}
+```
+
+```json
+{"action":"send","text":"deploy with key [REDACTED]","note":"1 secret masked"}
+```
+
+| `action` | 效果 |
+| --- | --- |
+| `send` | 把 `text`（缺省时为原文）发到窗格；`note` 显示在状态行。 |
+| `block` | 不发送；文字保留在输入栏；显示 `note`。 |
+| `done` | 不发送；清空输入栏。处理进程已自行接手（例如 `@ke ...` 交给了常驻模型）。 |
+
+其他任何回复、非法 JSON、连接错误，或 5 秒内没有回复，都按 `block` 处理。处理进程是一道闸门：一旦配置了，它的失效绝不会让文字漏过去。完全没有配置处理进程时，文字原样发送。
+
+30 毫秒内到达的回复在按键处理内完成；更慢的由主循环定时器收尾，界面不会被 socket 阻塞。
+
+## 侧栏面板
+
+协调进程运行时，智能体区底部会出现一块面板：一行标题，最多 12 行内容。每行有一个颜色级别：`ok`、`warn`、`err`、`info`（默认）或 `dim`。
+
+- 带有 `input` 的行会加下划线。点击它会打开输入栏并把该文字填进去。按 Enter 之前不会发送任何东西，因此协调进程可以提供 `@ke 继续` 这类仍然经过处理进程的动作。
+- 文件超过 30 秒未更新时，标题显示 `· offline`，各行变暗。超过 10 分钟，面板消失。
+- 面板至少给智能体列表留 4 行，且不会占用智能体区的一半以上。
+
+### 面板文件
+
+协调进程写一个 JSON 文件；壳每 2 秒检查一次修改时间，只在变化时重读。超过 64 KiB 的文件会被忽略。
+
+```json
+{
+  "v": 1,
+  "ts": 1726200000.0,
+  "title": "ke",
+  "rows": [
+    {"text": "claude ok 5h 34%", "level": "ok"},
+    {"text": "codex limited", "level": "warn"},
+    {"text": "继续上一个任务", "level": "info", "input": "@ke 继续"}
+  ]
+}
+```
+
+`ts`（Unix 秒，必填）是写入时间，用于离线和隐藏规则。`title`、`text`、`input` 中的控制字符会被去掉或替换；`title` 截到 40 个字符，`text` 120 个，`input` 2000 个。没有 `text` 的行会被丢弃。
+
+## 配置
+
+两个路径默认都在 `~/.workcat/ke/` 下。进程放在别处时可在 `config.toml` 里设置；环境变量优先于配置文件。
+
+```toml
+[ke]
+# 输入栏处理进程的 Unix socket。设置后，处理进程失效会拦下发送。
+# 未设置：~/.workcat/ke/composer.sock 存在时使用它，否则文字原样直通。
+composer_socket = "~/.workcat/ke/composer.sock"
+# 协调进程写入的 panel.json。
+panel_file = "~/.workcat/ke/panel.json"
+```
+
+| 配置项 | 覆盖它的环境变量 |
+| --- | --- |
+| `ke.composer_socket` | `KE_COMPOSER_SOCKET` |
+| `ke.panel_file` | `KE_PANEL_FILE`，其次 `WORKCAT_KE_HOME`（使用 `<目录>/panel.json`） |
+
+`[ke]` 的改动在下一次配置重载时生效；输入栏的 socket 在每次提交时解析，因此壳启动之后再起的处理进程会自动被用上。`keys.toggle_composer` 与其他快捷键一起记录在[配置参考](/docs/config-reference/)中。
+
+## 限制
+
+- 处理进程需要 Unix socket，因此 Windows 上的输入栏没有处理进程，文字原样发送。壳的发布只构建 macOS 与 Linux。
+- 子命令帮助与报错信息里仍写作 `herdr`；请读作 `ke`。
+- 处理进程、协调进程和常驻模型都不属于壳。上面的协议就是全部契约。

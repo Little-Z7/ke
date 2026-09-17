@@ -375,9 +375,10 @@ pub(super) fn render_expanded(
     }
     // Modified by ke: the coordinator panel takes the bottom of the agents section.
     let (detail_area, ke_area) = super::ke_panel::split_detail(detail_area, state.ke_panel);
-    if let Some(panel) = state.ke_panel {
-        super::ke_panel::render_ke_panel(buffer, ke_area, panel, palette);
-    }
+    hits.ke_panel_rows = match state.ke_panel {
+        Some(panel) => super::ke_panel::render_ke_panel(buffer, ke_area, panel, palette),
+        None => Vec::new(),
+    };
     super::endpoint_agents::render_expanded(
         buffer,
         detail_area,

@@ -1,0 +1,120 @@
+---
+title: ke (壳)
+description: The ke fork of Herdr — composer bar, coordinator panel, and how ke stays apart from an installed herdr.
+---
+
+ke (壳, "shell") is a modified fork of Herdr. It keeps Herdr's runtime, panes, and agent detection, and adds two hooks for a resident model that lives next to your coding agents:
+
+- a **composer bar** under the focused pane, so text you send to an agent can pass through a local processor (redaction, or handing `@ke` prompts to the resident model) before it reaches the CLI;
+- a **sidebar panel** the ke coordinator writes to, so quotas, tasks, and the resident model's state stay visible next to the agent list.
+
+The processor and the coordinator are separate programs; ke only defines how they plug in. Without them the composer sends text unchanged and the panel is hidden, and ke behaves like Herdr.
+
+Everywhere the built-in help says `herdr <command>`, run `ke <command>`.
+
+## Install
+
+macOS and Linux (x86_64 / aarch64):
+
+```bash
+curl -fsSL https://github.com/Little-Z7/ke/releases/latest/download/ke-install.sh | sh
+```
+
+The script installs `~/.local/bin/ke` (`KE_INSTALL_DIR` changes it) after checking the release `SHA256SUMS`. Set `KE_RELEASE_TAG=ke-v0.1.0` to pin a version. Run it again to update; `ke update` refuses on purpose and prints this command instead.
+
+To build from source, run `scripts/ke-install.sh` in a checkout (needs Rust and Zig 0.15.2). Do not use `cargo install`: it would produce a binary named `herdr`.
+
+## Isolation from herdr
+
+ke can live on the same machine as an upstream Herdr install without touching it:
+
+- Config, sockets, sessions, logs, and plugins live under the `ke` app directory (`ke-dev` for debug builds) instead of `herdr`.
+- Self-update and `ke integration install` / `uninstall` are disabled. ke reuses the agent status hooks that `herdr integration install <agent>` already put into each CLI: those hooks find their socket through `HERDR_SOCKET_PATH`, which ke's panes point at ke's own socket. Without hooks, ke falls back to screen-based status detection.
+- Panes started by ke carry `KE_ENV=1` next to Herdr's `HERDR_ENV=1`.
+- Starting `ke` from inside an upstream Herdr pane (`HERDR_ENV=1` set, `KE_ENV` not set) drops the inherited `HERDR_*` locator variables first, so ke never talks to Herdr's server and never trips Herdr's nested-session guard.
+
+## Composer bar
+
+Press `prefix+i` (configurable as `keys.toggle_composer`) to open a two-row bar under the pane surface. While it is open, typed and pasted text goes into the bar instead of the focused pane.
+
+- **Enter** hands the text to the processor, then submits the reply to the focused pane: `agent.prompt` for agent panes, `pane.send_input` followed by Enter for plain terminals.
+- **Esc** or **Ctrl+U** clears the bar; **Backspace** deletes.
+- With an **empty** bar, Enter, Esc, and Backspace still reach the pane, so an agent's own confirmations and interrupts keep working.
+- The status row shows the target pane and the processor's last note. Text typed while a submit is still processing is kept.
+
+The bar never sends on its own. A click on a panel row (below) only fills the bar; you still press Enter.
+
+### Processor protocol
+
+The processor listens on a Unix socket. For each submit ke connects, writes one JSON line, and reads one JSON line back:
+
+```json
+{"pane_id":"wA:p2","agent":"claude","text":"deploy with key sk-live-..."}
+```
+
+```json
+{"action":"send","text":"deploy with key [REDACTED]","note":"1 secret masked"}
+```
+
+| `action` | Effect |
+| --- | --- |
+| `send` | Send `text` (or the original text when `text` is missing) to the pane; show `note` in the status row. |
+| `block` | Send nothing; keep the text in the bar; show `note`. |
+| `done` | Send nothing; clear the bar. The processor took the input itself (for example `@ke ...` went to the resident model). |
+
+Any other reply, invalid JSON, a connection error, or no reply within 5 seconds counts as `block`. The processor is a gate: once one is configured, its failure never lets text through. When no processor is configured at all, text is sent unchanged.
+
+Replies faster than 30 ms complete inside the key handler; slower ones finish from the main-loop timer, so the UI never blocks on the socket.
+
+## Sidebar panel
+
+When the coordinator is running, the bottom of the agents section shows a panel with a title row and up to 12 rows. Each row has a color level: `ok`, `warn`, `err`, `info` (default), or `dim`.
+
+- Rows carrying an `input` are underlined. Clicking one opens the composer bar and puts that text in it. Nothing is sent until you press Enter, so the coordinator can offer actions like `@ke 继续` that still pass through the processor.
+- If the file is older than 30 seconds the title shows `· offline` and the rows dim. Older than 10 minutes, the panel disappears.
+- The panel keeps at least four agent rows and never takes more than half of the agents section.
+
+### Panel file
+
+The coordinator writes a single JSON file; ke polls its modification time every 2 seconds and re-reads it only when it changed. Files over 64 KiB are ignored.
+
+```json
+{
+  "v": 1,
+  "ts": 1726200000.0,
+  "title": "ke",
+  "rows": [
+    {"text": "claude ok 5h 34%", "level": "ok"},
+    {"text": "codex limited", "level": "warn"},
+    {"text": "继续上一个任务", "level": "info", "input": "@ke 继续"}
+  ]
+}
+```
+
+`ts` (Unix seconds, required) is the write time used for the offline and hide rules. Control characters in `title`, `text`, and `input` are stripped or replaced; `title` is cut at 40 characters, `text` at 120, `input` at 2000. Rows without `text` are dropped.
+
+## Configuration
+
+Both paths default to `~/.workcat/ke/`. Set them in `config.toml` when the processes live elsewhere; environment variables win over the config file.
+
+```toml
+[ke]
+# Unix socket of the composer processor. When set, a failing processor blocks sends.
+# Unset: ~/.workcat/ke/composer.sock while it exists, otherwise text passes through unchanged.
+composer_socket = "~/.workcat/ke/composer.sock"
+# panel.json written by the coordinator.
+panel_file = "~/.workcat/ke/panel.json"
+```
+
+| Key | Overriding variables |
+| --- | --- |
+| `ke.composer_socket` | `KE_COMPOSER_SOCKET` |
+| `ke.panel_file` | `KE_PANEL_FILE`, then `WORKCAT_KE_HOME` (uses `<dir>/panel.json`) |
+
+Changes to `[ke]` apply on the next config reload; the composer socket is resolved on every submit, so a processor started after ke is picked up automatically. `keys.toggle_composer` is documented with the other keybindings in the [config reference](/docs/config-reference/).
+
+## Limits
+
+- The processor needs a Unix socket, so the composer bar has no processor on Windows and sends text unchanged there. ke releases are built for macOS and Linux only.
+- Sub-command help and error messages still spell the command `herdr`; read them as `ke`.
+- The processor, the coordinator, and the resident model are not part of ke. Their protocols above are the whole contract.
