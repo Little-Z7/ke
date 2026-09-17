@@ -71,6 +71,7 @@ git tag ke-v<KE_VERSION> && git push origin ke/main ke-v<KE_VERSION>
 | 2026-09-17 | README.md | 顶部加 fork 声明与壳的安装命令，其余为上游原文 |
 | 2026-09-17 | tests/cli/sessions.rs | `integration_commands_run_locally_when_server_is_missing` 改为断言壳的行为：install / uninstall 返回 2 且不写、不删文件，status 照常可用（`tests/cli` 只在非 macOS 的 unix 上编译，v0 时在 macOS 上没跑到） |
 | 2026-09-17 | docs/next/website/src/data/config-reference.json | 补登记 `keys.toggle_composer`（配置参考与配置模型的一致性检查要求） |
+| 2026-09-17 | .github/dependabot.yml（删除） | 壳跟随上游的依赖版本，不单独升级；上游的 Dependabot 配置在壳的仓库里只会开无关的 PR 并触发上游 CI |
 
 ## 同步上游
 
