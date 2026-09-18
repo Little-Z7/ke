@@ -1452,13 +1452,85 @@
           "key": "ke.composer_socket",
           "type": "string",
           "default": "unset",
-          "description": "ke only: Unix socket of the composer processor. `KE_COMPOSER_SOCKET` overrides it. Set: a failing processor blocks sends. Unset: `~/.workcat/ke/composer.sock` while it exists, otherwise text passes through unchanged."
+          "description": "ke only: Unix socket of the composer processor. `KE_COMPOSER_SOCKET` overrides it. Set: a failing processor blocks sends. Unset: the resident's `composer.sock` in the session's `resident/` directory while it exists, otherwise text passes through unchanged."
         },
         {
           "key": "ke.panel_file",
           "type": "string",
           "default": "unset",
-          "description": "ke only: `panel.json` written by the ke coordinator for the sidebar panel. `KE_PANEL_FILE` and `WORKCAT_KE_HOME` override it. Unset: `~/.workcat/ke/panel.json`."
+          "description": "ke only: `panel.json` for the sidebar panel. `KE_PANEL_FILE` and `WORKCAT_KE_HOME` override it. Unset: the resident's `panel.json`."
+        },
+        {
+          "key": "ke.model.enabled",
+          "type": "boolean",
+          "default": "false",
+          "description": "ke only: start the resident model process (`ke resident`) with the server."
+        },
+        {
+          "key": "ke.model.active",
+          "type": "string",
+          "default": "\"local\"",
+          "description": "ke only: name of the `[ke.model.profiles.<name>]` entry used for `@ke`."
+        },
+        {
+          "key": "ke.model.system_prompt_file",
+          "type": "string",
+          "default": "\"~/.config/ke/resident.md\"",
+          "description": "ke only: Markdown appended to the built-in role prompt of the resident."
+        },
+        {
+          "key": "ke.model.panel_model",
+          "type": "string",
+          "default": "\"\"",
+          "description": "ke only: profile used for panel digests; empty means the active profile."
+        },
+        {
+          "key": "ke.model.cloud_confirmed",
+          "type": "boolean",
+          "default": "false",
+          "description": "ke only: set to true by ke after you confirm that a non-localhost profile may receive pane contents."
+        },
+        {
+          "key": "ke.model.profiles",
+          "type": "table",
+          "default": "empty",
+          "description": "ke only: named model profiles `[ke.model.profiles.<name>]` with `provider` (\"openai\" or \"cli\"), `base_url`, `api_key_env` (variable name, never the key), `model`, and `command` (argv for CLI providers)."
+        },
+        {
+          "key": "ke.redact.api_keys",
+          "type": "boolean",
+          "default": "true",
+          "description": "ke only: redact common API key formats (sk-…, AKIA…, ghp_…, xox…, AIza…, bearer tokens, JWTs)."
+        },
+        {
+          "key": "ke.redact.private_keys",
+          "type": "boolean",
+          "default": "true",
+          "description": "ke only: redact `-----BEGIN … PRIVATE KEY-----` blocks."
+        },
+        {
+          "key": "ke.redact.env_secrets",
+          "type": "boolean",
+          "default": "true",
+          "description": "ke only: redact the value of `KEY=value` lines whose key names a secret, token, or password."
+        },
+        {
+          "key": "ke.redact.internal_ips",
+          "type": "boolean",
+          "default": "false",
+          "description": "ke only: redact RFC 1918 addresses."
+        },
+        {
+          "key": "ke.redact.emails",
+          "type": "boolean",
+          "default": "false",
+          "description": "ke only: redact email addresses."
+        },
+        {
+          "key": "ke.redact.redact_for_local_models",
+          "type": "boolean",
+          "default": "false",
+          "description": "ke only: also redact the context sent to profiles that run on this machine."
         }
       ]
     },

@@ -130,6 +130,7 @@ pub fn maybe_run(args: &[String]) -> std::io::Result<CommandOutcome> {
         "plugin" => plugin::run_plugin_command(&args[2..])?,
         "integration" => integration::run_integration_command(&args[2..])?,
         "session" => run_session_command(&args[2..])?,
+        "resident" => crate::ke::resident::run_resident_command(&args[2..])?, // Modified by ke
         _ => return Ok(CommandOutcome::NotCli),
     };
 

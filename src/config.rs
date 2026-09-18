@@ -51,8 +51,8 @@ pub(crate) use self::{
     window_title::{sanitize_window_title_text, window_title_diagnostics},
 };
 
-// Modified by ke: KeConfig is the [ke] section.
-pub(crate) use self::model::KeConfig;
+// Modified by ke: the [ke] section and its sub-tables.
+pub(crate) use self::model::{KeConfig, KeModelConfig};
 pub(crate) use self::{keybinds::CommandKeybindType, model::KeysConfig};
 
 pub const CONFIG_PATH_ENV_VAR: &str = "HERDR_CONFIG_PATH";

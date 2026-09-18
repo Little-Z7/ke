@@ -86,10 +86,12 @@ pub fn run_server() -> io::Result<()> {
         );
         print_ready_message(&api::socket_path(), &client_socket_path());
         server.app.run_plugin_startup_hooks();
+        crate::ke::resident::supervisor::apply_config(&loaded_config.config); // Modified by ke
 
         server.run().await
     });
 
+    crate::ke::resident::supervisor::shutdown(); // Modified by ke
     rt.shutdown_timeout(Duration::from_millis(100));
     crate::logging::shutdown("server");
     result
@@ -195,9 +197,11 @@ fn run_handoff_import_server(socket_path: &Path, token: &str) -> io::Result<()> 
         info!("handoff import server started");
         print_ready_message(&api::socket_path(), &client_socket_path());
         server.app.run_plugin_startup_hooks();
+        crate::ke::resident::supervisor::apply_config(&loaded_config.config); // Modified by ke
         server.run().await
     });
 
+    crate::ke::resident::supervisor::shutdown(); // Modified by ke
     rt.shutdown_timeout(Duration::from_millis(100));
     crate::logging::shutdown("server");
     result

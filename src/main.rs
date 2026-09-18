@@ -28,6 +28,7 @@ mod handoff_runtime;
 mod input;
 mod integration;
 mod ipc;
+mod ke; // Modified by ke
 mod ke_env; // Modified by ke
 mod kitty_graphics;
 mod layout;
@@ -230,14 +231,42 @@ const DEFAULT_CONFIG: &str = r##"# herdr configuration
 # [worktrees]
 # directory = "~/.ke/worktrees"
 
-# ke only: where the shell finds the ke processes. Environment variables
-# (KE_COMPOSER_SOCKET, KE_PANEL_FILE, WORKCAT_KE_HOME) override these keys.
+# ke only: the shell's own section. By default the resident (`ke resident`) owns the
+# composer socket and the panel file under the session's resident/ directory. Environment
+# variables (KE_COMPOSER_SOCKET, KE_PANEL_FILE, WORKCAT_KE_HOME) override the path keys.
 # [ke]
-# Composer processor socket. Set: a failing processor blocks sends.
-# Unset: ~/.workcat/ke/composer.sock while it exists, otherwise text passes through unchanged.
-# composer_socket = "~/.workcat/ke/composer.sock"
-# panel.json written by the ke coordinator for the sidebar panel.
-# panel_file = "~/.workcat/ke/panel.json"
+# Point the composer at another processor. Set: a failing processor blocks sends.
+# composer_socket = "/path/to/composer.sock"
+# Read the sidebar panel from another writer.
+# panel_file = "/path/to/panel.json"
+
+# The resident model ("管家"): answers @ke and keeps the panel. Off by default.
+# [ke.model]
+# enabled = false
+# active = "local"                             # profile used for @ke
+# system_prompt_file = "~/.config/ke/resident.md"
+# panel_model = ""                             # profile for panel digests; empty = active
+# cloud_confirmed = false                      # set by ke after you confirm a non-local profile
+
+# [ke.model.profiles.local]
+# provider = "openai"                          # OpenAI-compatible Chat Completions
+# base_url = "http://localhost:11434/v1"       # Ollama, llama.cpp, vLLM, LM Studio...
+# model = "qwen3:4b"
+
+# [ke.model.profiles.ark]
+# provider = "openai"
+# base_url = "https://ark.cn-beijing.volces.com/api/v3"
+# api_key_env = "ARK_API_KEY"                  # name of the variable; the key stays out of config
+# model = "doubao-seed-1-6"
+
+# Redaction gate applied to composer text (and to model context for non-local profiles).
+# [ke.redact]
+# api_keys = true
+# private_keys = true
+# env_secrets = true
+# internal_ips = false
+# emails = false
+# redact_for_local_models = false
 
 [ui]
 # Sidebar width (auto-scaled based on workspace names, this sets the default)

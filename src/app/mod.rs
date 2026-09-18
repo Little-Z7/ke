@@ -762,12 +762,19 @@ impl App {
         self.config_reloaded_from_disk = true;
         let previous_toast = self.state.toast.clone();
         let report = match crate::config::load_live_config() {
-            Ok(loaded) => self.apply_live_config(
-                &loaded.config,
-                &loaded.diagnostics,
-                &loaded.invalid_sections,
-                notify_success,
-            ),
+            Ok(loaded) => {
+                // Modified by ke: the resident follows [ke.model] changes without a server restart.
+                // Test apps never persist sessions and must not spawn processes either.
+                if self.policy.persist_session {
+                    crate::ke::resident::supervisor::apply_config(&loaded.config);
+                }
+                self.apply_live_config(
+                    &loaded.config,
+                    &loaded.diagnostics,
+                    &loaded.invalid_sections,
+                    notify_success,
+                )
+            }
             Err(diagnostics) => {
                 self.state.toast = None;
                 self.state.config_diagnostic =

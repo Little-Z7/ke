@@ -325,18 +325,126 @@ pub struct Config {
     pub ke: KeConfig,
 }
 
-/// Modified by ke: where the shell finds the composer processor and the coordinator's panel file.
-/// Environment variables win over these keys; unset keys fall back to `~/.workcat/ke/`.
+/// Modified by ke: the shell's own section. Where the composer processor and the panel file live,
+/// the resident model ("管家") and the redaction gate.
+/// Environment variables win over the path keys; unset keys fall back to the session's
+/// `resident/` directory where `ke resident` puts them.
 #[derive(Debug, Clone, Default, PartialEq, Eq, Deserialize)]
 #[serde(default)]
 pub struct KeConfig {
     /// Unix socket of the composer processor (redaction / resident model). `KE_COMPOSER_SOCKET`
-    /// overrides it. When set, a failing processor blocks sends; unset uses
-    /// `~/.workcat/ke/composer.sock` only while that socket exists, otherwise text passes through unchanged.
+    /// overrides it. When set, a failing processor blocks sends; unset uses the resident's
+    /// `composer.sock` only while that socket exists, otherwise text passes through unchanged.
     pub composer_socket: Option<String>,
-    /// `panel.json` written by the ke coordinator for the sidebar panel. `KE_PANEL_FILE` and
-    /// `WORKCAT_KE_HOME` override it. Unset: `~/.workcat/ke/panel.json`.
+    /// `panel.json` for the sidebar panel. `KE_PANEL_FILE` and `WORKCAT_KE_HOME` override it.
+    /// Unset: the resident's `panel.json`.
     pub panel_file: Option<String>,
+    /// The resident model that answers `@ke` and keeps the panel.
+    pub model: KeModelConfig,
+    /// Rule families of the redaction gate applied to composer text and to model context.
+    pub redact: KeRedactConfig,
+}
+
+/// Modified by ke: `[ke.model]`.
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+#[serde(default)]
+pub struct KeModelConfig {
+    /// Start `ke resident` with the server. Default: false.
+    pub enabled: bool,
+    /// Name of the profile in `profiles` used for `@ke`. Default: "local".
+    pub active: String,
+    /// Markdown file appended to the built-in role prompt. Default: `~/.config/ke/resident.md`.
+    pub system_prompt_file: String,
+    /// Profile used for panel digests; empty means the active profile.
+    pub panel_model: String,
+    /// Set to true after the first confirmation that a non-localhost profile may receive
+    /// pane contents. Default: false.
+    pub cloud_confirmed: bool,
+    /// Named model profiles: `[ke.model.profiles.<name>]` with `provider`, `base_url`,
+    /// `api_key_env`, `model`, and `command` for CLI providers.
+    pub profiles: std::collections::BTreeMap<String, KeModelProfile>,
+}
+
+impl Default for KeModelConfig {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            active: "local".into(),
+            system_prompt_file: "~/.config/ke/resident.md".into(),
+            panel_model: String::new(),
+            cloud_confirmed: false,
+            profiles: std::collections::BTreeMap::new(),
+        }
+    }
+}
+
+/// Modified by ke: one entry of `[ke.model.profiles]`.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Deserialize)]
+#[serde(default)]
+pub struct KeModelProfile {
+    /// "openai" (OpenAI-compatible Chat Completions) or "cli" (run a coding-agent CLI headless).
+    pub provider: String,
+    /// Base URL of an OpenAI-compatible server, e.g. `http://localhost:11434/v1`.
+    pub base_url: String,
+    /// Name of the environment variable holding the API key; the key itself never lives in config.
+    pub api_key_env: String,
+    /// Model id sent to the provider.
+    pub model: String,
+    /// For `provider = "cli"`: argv of the headless command; the prompt is passed on stdin.
+    pub command: Vec<String>,
+}
+
+impl KeModelProfile {
+    /// Whether requests stay on this machine (no cloud confirmation needed).
+    #[allow(dead_code)] // consumed by the resident's model half (next milestone)
+    pub fn is_local(&self) -> bool {
+        if self.provider == "cli" {
+            return true;
+        }
+        let host = self
+            .base_url
+            .split("://")
+            .nth(1)
+            .unwrap_or(&self.base_url)
+            .split(['/', ':'])
+            .next()
+            .unwrap_or("");
+        matches!(
+            host,
+            "localhost" | "127.0.0.1" | "::1" | "[::1]" | "0.0.0.0"
+        )
+    }
+}
+
+/// Modified by ke: `[ke.redact]`. The patterns are fixed in `ke::redact`; only the families toggle.
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+#[serde(default)]
+pub struct KeRedactConfig {
+    /// Common API key formats (sk-…, AKIA…, ghp_…, xox…, AIza…, bearer tokens, JWTs). Default: true.
+    pub api_keys: bool,
+    /// `-----BEGIN … PRIVATE KEY-----` blocks. Default: true.
+    pub private_keys: bool,
+    /// `KEY=value` where KEY names a secret/token/password. Default: true.
+    pub env_secrets: bool,
+    /// RFC 1918 addresses. Default: false.
+    pub internal_ips: bool,
+    /// Email addresses. Default: false.
+    pub emails: bool,
+    /// Also redact the context sent to profiles that run on this machine. Default: false.
+    pub redact_for_local_models: bool,
+}
+
+impl Default for KeRedactConfig {
+    fn default() -> Self {
+        Self {
+            api_keys: true,
+            private_keys: true,
+            env_secrets: true,
+            internal_ips: false,
+            emails: false,
+            redact_for_local_models: false,
+        }
+    }
 }
 
 impl KeConfig {
@@ -346,7 +454,7 @@ impl KeConfig {
         Self::composer_socket_from(
             std::env::var_os("KE_COMPOSER_SOCKET"),
             self.composer_socket.as_deref(),
-            std::env::var_os("HOME"),
+            Some(crate::ke::paths::ResidentPaths::for_active_session().composer_socket),
             |path| path.exists(),
         )
     }
@@ -354,7 +462,7 @@ impl KeConfig {
     fn composer_socket_from(
         env_socket: Option<std::ffi::OsString>,
         configured: Option<&str>,
-        home: Option<std::ffi::OsString>,
+        default_socket: Option<std::path::PathBuf>,
         exists: impl Fn(&std::path::Path) -> bool,
     ) -> Option<std::path::PathBuf> {
         if let Some(path) = env_socket.filter(|value| !value.is_empty()) {
@@ -363,10 +471,7 @@ impl KeConfig {
         if let Some(path) = configured.map(str::trim).filter(|value| !value.is_empty()) {
             return Some(crate::worktree::expand_tilde_path(path));
         }
-        let path = std::path::PathBuf::from(home?)
-            .join(".workcat")
-            .join("ke")
-            .join("composer.sock");
+        let path = default_socket?;
         exists(&path).then_some(path)
     }
 
@@ -376,7 +481,7 @@ impl KeConfig {
             std::env::var_os("KE_PANEL_FILE"),
             std::env::var_os("WORKCAT_KE_HOME"),
             self.panel_file.as_deref(),
-            std::env::var_os("HOME"),
+            Some(crate::ke::paths::ResidentPaths::for_active_session().panel_file),
         )
     }
 
@@ -384,7 +489,7 @@ impl KeConfig {
         env_file: Option<std::ffi::OsString>,
         env_home: Option<std::ffi::OsString>,
         configured: Option<&str>,
-        home: Option<std::ffi::OsString>,
+        default_file: Option<std::path::PathBuf>,
     ) -> Option<std::path::PathBuf> {
         if let Some(path) = env_file.filter(|value| !value.is_empty()) {
             return Some(std::path::PathBuf::from(path));
@@ -395,12 +500,24 @@ impl KeConfig {
         if let Some(path) = configured.map(str::trim).filter(|value| !value.is_empty()) {
             return Some(crate::worktree::expand_tilde_path(path));
         }
-        Some(
-            std::path::PathBuf::from(home?)
-                .join(".workcat")
-                .join("ke")
-                .join("panel.json"),
-        )
+        default_file
+    }
+
+    /// The active model profile, if it exists.
+    #[allow(dead_code)] // consumed by the resident's model half (next milestone)
+    pub fn active_profile(&self) -> Option<&KeModelProfile> {
+        self.model.profiles.get(&self.model.active)
+    }
+
+    /// Rule families as the gate consumes them.
+    pub fn redact_rules(&self) -> crate::ke::redact::RedactRules {
+        crate::ke::redact::RedactRules {
+            api_keys: self.redact.api_keys,
+            private_keys: self.redact.private_keys,
+            env_secrets: self.redact.env_secrets,
+            internal_ips: self.redact.internal_ips,
+            emails: self.redact.emails,
+        }
     }
 }
 
@@ -1632,28 +1749,70 @@ directory = "~/Projects/herdr-worktrees"
         let default_config = Config::default();
         assert_eq!(default_config.ke.composer_socket, None);
         assert_eq!(default_config.ke.panel_file, None);
+        assert!(!default_config.ke.model.enabled);
+        assert_eq!(default_config.ke.model.active, "local");
+        assert!(default_config.ke.model.profiles.is_empty());
+        assert!(default_config.ke.active_profile().is_none());
+        assert!(default_config.ke.redact.api_keys && !default_config.ke.redact.emails);
 
         let toml = r#"
 [ke]
 composer_socket = "~/run/ke.sock"
 panel_file = "/srv/ke/panel.json"
+
+[ke.model]
+enabled = true
+active = "ark"
+
+[ke.model.profiles.local]
+provider = "openai"
+base_url = "http://localhost:11434/v1"
+model = "qwen3:4b"
+
+[ke.model.profiles.ark]
+provider = "openai"
+base_url = "https://ark.cn-beijing.volces.com/api/v3"
+api_key_env = "ARK_API_KEY"
+model = "doubao-seed-1-6"
+
+[ke.model.profiles.claude-sub]
+provider = "cli"
+command = ["claude", "-p"]
+
+[ke.redact]
+emails = true
 "#;
         let config: Config = toml::from_str(toml).unwrap();
         assert_eq!(config.ke.composer_socket.as_deref(), Some("~/run/ke.sock"));
         assert_eq!(config.ke.panel_file.as_deref(), Some("/srv/ke/panel.json"));
+        assert!(config.ke.model.enabled);
+        let ark = config.ke.active_profile().expect("active profile");
+        assert_eq!(ark.model, "doubao-seed-1-6");
+        assert_eq!(ark.api_key_env, "ARK_API_KEY");
+        assert!(!ark.is_local(), "ark is a cloud endpoint");
+        assert!(config.ke.model.profiles["local"].is_local());
+        assert!(
+            config.ke.model.profiles["claude-sub"].is_local(),
+            "cli providers stay local"
+        );
+        assert_eq!(
+            config.ke.model.profiles["claude-sub"].command,
+            vec!["claude", "-p"]
+        );
+        assert!(config.ke.redact_rules().emails);
+        assert!(config.ke.redact_rules().api_keys);
     }
 
     #[test]
     fn ke_composer_socket_prefers_env_then_config_then_existing_default() {
         use std::path::{Path, PathBuf};
-        let home = Some(std::ffi::OsString::from("/home/me"));
-        let default_socket = PathBuf::from("/home/me/.workcat/ke/composer.sock");
+        let default_socket = PathBuf::from("/cfg/ke/resident/composer.sock");
 
         assert_eq!(
             KeConfig::composer_socket_from(
                 Some("/tmp/env.sock".into()),
                 Some("/tmp/cfg.sock"),
-                home.clone(),
+                Some(default_socket.clone()),
                 |_| false
             ),
             Some(PathBuf::from("/tmp/env.sock")),
@@ -1663,20 +1822,21 @@ panel_file = "/srv/ke/panel.json"
             KeConfig::composer_socket_from(
                 Some(std::ffi::OsString::new()),
                 Some(" /tmp/cfg.sock "),
-                home.clone(),
+                Some(default_socket.clone()),
                 |_| false
             ),
             Some(PathBuf::from("/tmp/cfg.sock")),
             "empty env is ignored, configured path is used even when missing"
         );
         assert_eq!(
-            KeConfig::composer_socket_from(None, Some(""), home.clone(), |path| path
-                == Path::new(&default_socket)),
+            KeConfig::composer_socket_from(None, Some(""), Some(default_socket.clone()), |path| {
+                path == Path::new(&default_socket)
+            }),
             Some(default_socket.clone()),
             "blank config falls back to the default when it exists"
         );
         assert_eq!(
-            KeConfig::composer_socket_from(None, None, home, |_| false),
+            KeConfig::composer_socket_from(None, None, Some(default_socket), |_| false),
             None,
             "missing default means no processor"
         );
@@ -1685,14 +1845,14 @@ panel_file = "/srv/ke/panel.json"
     #[test]
     fn ke_panel_file_prefers_env_then_config_then_default() {
         use std::path::PathBuf;
-        let home = Some(std::ffi::OsString::from("/home/me"));
+        let default_file = Some(PathBuf::from("/cfg/ke/resident/panel.json"));
 
         assert_eq!(
             KeConfig::panel_file_from(
                 Some("/tmp/panel.json".into()),
                 Some("/tmp/kehome".into()),
                 Some("/tmp/cfg.json"),
-                home.clone()
+                default_file.clone()
             ),
             Some(PathBuf::from("/tmp/panel.json"))
         );
@@ -1701,17 +1861,17 @@ panel_file = "/srv/ke/panel.json"
                 None,
                 Some("/tmp/kehome".into()),
                 Some("/tmp/cfg.json"),
-                home.clone()
+                default_file.clone()
             ),
             Some(PathBuf::from("/tmp/kehome/panel.json"))
         );
         assert_eq!(
-            KeConfig::panel_file_from(None, None, Some("/tmp/cfg.json"), home.clone()),
+            KeConfig::panel_file_from(None, None, Some("/tmp/cfg.json"), default_file.clone()),
             Some(PathBuf::from("/tmp/cfg.json"))
         );
         assert_eq!(
-            KeConfig::panel_file_from(None, None, None, home),
-            Some(PathBuf::from("/home/me/.workcat/ke/panel.json"))
+            KeConfig::panel_file_from(None, None, None, default_file.clone()),
+            default_file
         );
         assert_eq!(KeConfig::panel_file_from(None, None, None, None), None);
     }
