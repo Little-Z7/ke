@@ -7,6 +7,12 @@ pub const BASE_VERSION: &str = env!("CARGO_PKG_VERSION");
 pub const KE_VERSION: &str = "0.3.0";
 // Modified by ke: where ke releases and the installer live.
 #[cfg(windows)]
+pub const KE_INSTALL_SCRIPT_URL: &str =
+    "https://github.com/Little-Z7/ke/releases/latest/download/ke-install.ps1";
+#[cfg(not(windows))]
+pub const KE_INSTALL_SCRIPT_URL: &str =
+    "https://github.com/Little-Z7/ke/releases/latest/download/ke-install.sh";
+#[cfg(windows)]
 pub const KE_INSTALL_COMMAND: &str = "powershell -ExecutionPolicy Bypass -c \"irm https://github.com/Little-Z7/ke/releases/latest/download/ke-install.ps1 | iex\"";
 #[cfg(not(windows))]
 pub const KE_INSTALL_COMMAND: &str =

@@ -258,7 +258,13 @@ const DEFAULT_CONFIG: &str = r##"# herdr configuration
 # provider = "openai"
 # base_url = "https://ark.cn-beijing.volces.com/api/v3"
 # api_key_env = "ARK_API_KEY"                  # name of the variable; the key stays out of config
-# model = "doubao-seed-1-6"
+# model = "doubao-seed-1-6"                    # or an ep- endpoint id from Coding Plan / Ark
+
+# [ke.model.profiles.openai]
+# provider = "openai"
+# base_url = "https://api.openai.com/v1"
+# api_key_env = "OPENAI_API_KEY"
+# model = "gpt-4o"
 
 # Redaction gate applied to composer text (and to model context for non-local profiles).
 # [ke.redact]
@@ -616,18 +622,15 @@ fn main() -> io::Result<()> {
             }
             Err(err) => {
                 eprintln!("{err}");
-                eprintln!("usage: herdr update [--handoff]");
+                eprintln!("usage: ke update");
                 std::process::exit(2);
             }
         };
-        match update::self_update(options) {
+        let _ = options;
+        match update::ke_release_update() {
             Ok(_) => return Ok(()),
             Err(e) => {
-                if e.starts_with("self-update is disabled") {
-                    eprintln!("{e}");
-                } else {
-                    eprintln!("update failed: {e}");
-                }
+                eprintln!("update failed: {e}");
                 std::process::exit(1);
             }
         }
@@ -637,8 +640,12 @@ fn main() -> io::Result<()> {
         platform::begin_cli_output();
         // Modified by ke: say what this binary is. The command lists below keep upstream's
         // spelling so they stay mergeable; the note tells users to read `herdr` as `ke`.
-        println!("ke (壳) — a modified fork of herdr, the terminal workspace manager for AI coding agents");
-        println!("This binary is installed as `ke`: wherever this help says `herdr <command>`, run `ke <command>`.");
+        println!(
+            "ke (壳) — a modified fork of herdr, the terminal workspace manager for AI coding agents"
+        );
+        println!(
+            "This binary is installed as `ke`: wherever this help says `herdr <command>`, run `ke <command>`."
+        );
         println!();
         println!("Usage: herdr [options]");
         println!("       herdr --session <name> [options]");
@@ -886,9 +893,11 @@ mod tests {
 
     #[test]
     fn nested_message_strings_no_longer_repeat_herdr_prefix() {
-        assert!(NESTED_HERDR_MESSAGES
-            .iter()
-            .all(|message| !message.starts_with("herdr:")));
+        assert!(
+            NESTED_HERDR_MESSAGES
+                .iter()
+                .all(|message| !message.starts_with("herdr:"))
+        );
     }
 
     #[cfg(unix)]

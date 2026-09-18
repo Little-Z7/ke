@@ -45,7 +45,11 @@ fn navigate_update_status_uses_released_desktop_and_mobile_placement() {
         deadline: std::time::Instant::now(),
     });
     let top = state.compose(106, 30).expect("top-tab update shell");
-    assert!(row_text(&top, 29).contains("update ready"));
+    let pane = state.layout(106, 30).pane_surface;
+    assert!(
+        row_text(&top, pane.bottom().saturating_sub(1)).contains("update ready"),
+        "update ready should sit on the mode bar at the bottom of the pane, above the composer"
+    );
 
     let mobile = state.compose(44, 30).expect("mobile update shell");
     let mobile_text = mobile
@@ -62,10 +66,10 @@ fn mobile_layout_reserves_only_client_header() {
     let state = ClientShellState::new(config);
     let layout = state.layout(44, 20);
     assert_eq!(layout.mobile_header, Rect::new(0, 0, 44, 2));
-    assert_eq!(layout.pane_surface, Rect::new(0, 2, 44, 18));
+    assert_eq!(layout.pane_surface, Rect::new(0, 2, 44, 16));
     assert_eq!(
         state.surface_size(44, 20),
-        ClientSurfaceSize { cols: 44, rows: 18 }
+        ClientSurfaceSize { cols: 44, rows: 16 }
     );
 }
 

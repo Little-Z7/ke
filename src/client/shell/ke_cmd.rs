@@ -17,6 +17,10 @@ impl ClientShellState {
                 let body = self.ke_status_text();
                 self.finish_ke_slash(None, Some(("壳状态", &body)), outcome);
             }
+            SlashCommand::Update => {
+                let body = slash::update_text();
+                self.finish_ke_slash(Some("更新命令"), Some(("壳更新", &body)), outcome);
+            }
             SlashCommand::Log => match self.ke_log_overlay() {
                 Some(overlay) => {
                     let _ = self.set_composer_chat(overlay);
@@ -51,8 +55,9 @@ impl ClientShellState {
                 }
             }
             SlashCommand::Model { arg: None } => {
-                let body = slash::describe_model(&self.config.ke);
-                self.finish_ke_slash(None, Some(("壳模型", &body)), outcome);
+                self.overlay = None;
+                self.open_ke_model_form(outcome);
+                self.finish_ke_slash(Some("模型配置"), None, outcome);
             }
             SlashCommand::Model { arg: Some(arg) } => self.ke_slash_set_model(&arg, outcome),
             SlashCommand::Provider {
@@ -65,6 +70,35 @@ impl ClientShellState {
     }
 
     fn ke_slash_set_model(&mut self, arg: &str, outcome: &mut ClientShellInput) {
+        if let Some(plan) = slash::plan_template(arg) {
+            if !self.config.ke.model.profiles.contains_key(arg) {
+                if !slash::profile_name_ok(arg) {
+                    self.finish_ke_slash(
+                        Some("预设名只能用字母、数字、短横和下划线"),
+                        None,
+                        outcome,
+                    );
+                    return;
+                }
+                let wrote = crate::config::update_file_at(
+                    &crate::config::config_path(),
+                    "ke model",
+                    |content| slash::apply_plan_template(content, plan),
+                );
+                match wrote {
+                    Ok(()) => {
+                        self.request_config_reload(outcome);
+                        self.finish_ke_slash(
+                            Some(&format!("已套用接入模板 {}（{}）", plan.name, plan.label)),
+                            None,
+                            outcome,
+                        );
+                    }
+                    Err(err) => self.finish_ke_slash(Some(&err), None, outcome),
+                }
+                return;
+            }
+        }
         if self.config.ke.model.profiles.contains_key(arg) || arg == "local" {
             if !slash::profile_name_ok(arg) {
                 self.finish_ke_slash(Some("预设名只能用字母、数字、短横和下划线"), None, outcome);
@@ -232,7 +266,7 @@ impl ClientShellState {
         super::ke_chat::overlay_from_log(&entries)
     }
 
-    fn request_config_reload(&mut self, outcome: &mut ClientShellInput) {
+    pub(super) fn request_config_reload(&mut self, outcome: &mut ClientShellInput) {
         let _ = self.push_endpoint_method_with_kind(
             crate::api::schema::Method::ServerReloadConfig(
                 crate::api::schema::EmptyParams::default(),

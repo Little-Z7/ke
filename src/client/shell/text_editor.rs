@@ -41,6 +41,10 @@ impl TextEditor {
         &self.text
     }
 
+    pub fn cursor(&self) -> usize {
+        self.cursor
+    }
+
     pub fn clear(&mut self) {
         self.text.clear();
         self.cursor = 0;
@@ -463,9 +467,11 @@ mod tests {
         editor.handle_key(&event);
         assert_eq!(editor.as_str(), "a中   e\u{301}βb");
         let before = editor.clone();
-        assert!(editor
-            .handle_key(&event.with_kind(KeyEventKind::Release))
-            .is_none());
+        assert!(
+            editor
+                .handle_key(&event.with_kind(KeyEventKind::Release))
+                .is_none()
+        );
         assert_eq!(editor, before);
         let repeat =
             TerminalKey::new(KeyCode::Left, KeyModifiers::NONE).with_kind(KeyEventKind::Repeat);

@@ -110,6 +110,12 @@ git tag ke-v<KE_VERSION> && git push origin ke/main ke-v<KE_VERSION>
 | 2026-09-18 | src/ke/resident/processor.rs、src/client/shell/composer.rs、src/ke/resident/supervisor.rs、src/ke/resident/mod.rs | Windows：composer/resident 改走 `ipc::` 本地 socket（命名管道）；去掉 unix-only 门；面板原子写兼容 Windows rename |
 | 2026-09-18 | .github/workflows/ke-release.yml、distribution/ke-install.ps1（新增）、src/build_info.rs | Windows 发布 `ke-windows-x86_64.zip`（含 ConPTY）；PowerShell 安装脚本；`KE_INSTALL_COMMAND` 按平台切换 |
 | 2026-09-18 | docs/next/.../ke.mdx（en/zh-cn/ja）、FORK.md、README.md、config-reference.json | 文档与安装说明补 Windows |
+| 2026-09-18 | src/client/shell/composer.rs、text_editor.rs、src/ke/slash.rs | 底栏长文本折行；`//`/`/ke` 指令列表（↑↓/Tab） |
+| 2026-09-18 | src/client/shell/ke_model.rs（新增）、overlays.rs、overlay_input.rs、src/config/model.rs、src/ke/resident/model.rs | `/ke model` 打开模型配置 TUI；profile 增加 think / max_tokens |
+| 2026-09-18 | src/ke/slash.rs、src/client/shell/ke_model.rs、ke_cmd.rs、overlays.rs | 模型弹层接入模板：Ollama / 火山方舟 Coding Plan / OpenAI；`/ke model ark` 可套用未写入的模板 |
+| 2026-09-18 | src/ke/slash.rs、src/client/shell/ke_cmd.rs | `/ke update` 在底栏显示安装命令（与 CLI `ke update` 一致，不自更新） |
+| 2026-09-18 | src/update.rs、src/main.rs、src/build_info.rs | 终端 `ke update` 跑 ke 官方安装脚本；不再只打印命令；仍禁用 herdr.dev 自更新 |
+| 2026-09-18 | src/client/shell/state.rs、composer.rs | 桌面壳栏改到窗格右侧；窄屏仍用底栏 |
 
 ## 同步上游
 

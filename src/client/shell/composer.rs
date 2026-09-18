@@ -1,18 +1,27 @@
 //! Modified by ke: native composer dock (壳输入栏).
 //!
-//! The two-row bar is always on screen under the pane surface. Keys go to the focused pane until
-//! the dock is focused (click it, or prefix+i). `/ke` commands run locally; `//…` drops one `/`
-//! and goes to the pane. `@ke` replies expand a transcript above the input; click the header or Esc
-//! to collapse it. On Enter other text is handed to a local processor over a local socket, then
-//! submitted with `agent.prompt` or `pane.send_input`. With an empty unfocused bar, Enter / Esc /
-//! Backspace still reach the pane.
+//! Desktop: a right-hand column beside the pane. Narrow / mobile: the original two-row bar under
+//! the pane. Keys go to the focused pane until the dock is focused (click it, or prefix+i). `/ke`
+//! commands run locally; `//…` drops one `/` and goes to the pane. `@ke` replies expand a
+//! transcript above the input; click the header or Esc to collapse it. On Enter other text is
+//! handed to a local processor over a local socket, then submitted with `agent.prompt` or
+//! `pane.send_input`. With an empty unfocused bar, Enter / Esc / Backspace still reach the pane.
 
 use super::*;
 use crossterm::event::{MouseButton, MouseEventKind};
+use unicode_segmentation::UnicodeSegmentation;
+use unicode_width::UnicodeWidthStr;
 
 pub(super) const COMPOSER_ROWS: u16 = 2;
+/// Desktop dock width. Narrow terminals keep the bottom bar instead.
+pub(super) const COMPOSER_COLS: u16 = 32;
+pub(super) const COMPOSER_MIN_PANE_COLS: u16 = 24;
 /// Extra rows for an expanded `@ke` transcript sitting above the input.
 pub(super) const CHAT_ROWS: u16 = 8;
+/// Long composer text wraps instead of vanishing off the left edge.
+pub(super) const INPUT_MAX_ROWS: u16 = 6;
+/// `/ke` and `//` hint list sitting above the status row.
+pub(super) const PALETTE_MAX_ROWS: u16 = 5;
 /// Replies faster than this finish inside the key handler; slower ones complete from the timer.
 const SYNC_WAIT: std::time::Duration = std::time::Duration::from_millis(30);
 /// A processor that has not answered by now is treated as a block.
@@ -20,12 +29,13 @@ pub(super) const PENDING_LIMIT: std::time::Duration = std::time::Duration::from_
 
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub(super) struct ClientComposer {
-    pub(super) input: String,
+    pub(super) input: TextEditor,
     pub(super) notice: Option<String>,
     /// When false the bar is still drawn, but keys go to the focused pane.
     pub(super) focused: bool,
     pub(super) chat: Option<super::ke_chat::ClientKeChatOverlay>,
     pub(super) chat_expanded: bool,
+    pub(super) palette_index: usize,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -138,11 +148,38 @@ impl ClientShellState {
             && self.focused_pane_id().is_some()
     }
 
-    pub(super) fn composer_reserved_rows(&self) -> u16 {
+    pub(super) fn composer_dock_on_right(&self, cols: u16, rows: u16) -> bool {
+        if self.composer.is_none() {
+            return false;
+        }
+        let base = self.base_layout(cols, rows);
+        base.mobile_header.is_empty()
+            && base.pane_surface.width > COMPOSER_COLS.saturating_add(COMPOSER_MIN_PANE_COLS)
+    }
+
+    fn composer_changes_pane_geometry(&self) -> bool {
+        match self.last_composed_size {
+            Some((cols, rows)) => !self.composer_dock_on_right(cols, rows),
+            None => true,
+        }
+    }
+
+    pub(super) fn composer_reserved_rows_for(&self, cols: u16) -> u16 {
         let Some(composer) = self.composer.as_ref() else {
             return 0;
         };
-        COMPOSER_ROWS.saturating_add(if composer.chat_expanded { CHAT_ROWS } else { 0 })
+        let inner = usize::from(cols.saturating_sub(4).max(8));
+        let input_rows = input_visual_rows(composer.input.as_str(), inner)
+            .min(usize::from(INPUT_MAX_ROWS))
+            .max(1) as u16;
+        let palette_rows = crate::ke::slash::slash_palette(composer.input.as_str())
+            .map(|hints| (hints.len() as u16).min(PALETTE_MAX_ROWS))
+            .unwrap_or(0);
+        let chat_rows = if composer.chat_expanded { CHAT_ROWS } else { 0 };
+        1u16.saturating_add(input_rows)
+            .saturating_add(palette_rows)
+            .saturating_add(chat_rows)
+            .max(COMPOSER_ROWS)
     }
 
     /// Prefix+i focuses or unfocuses the dock. The bar itself stays on screen.
@@ -150,7 +187,9 @@ impl ClientShellState {
         let composer = self.composer.get_or_insert_with(ClientComposer::default);
         composer.focused = !composer.focused;
         outcome.repaint = true;
-        outcome.resize = true;
+        if self.composer_changes_pane_geometry() {
+            outcome.resize = true;
+        }
     }
 
     /// Opens the bar if needed and replaces its text (coordinator panel click). The text is not
@@ -181,19 +220,16 @@ impl ClientShellState {
         }
         composer.chat_expanded = !composer.chat_expanded;
         outcome.repaint = true;
-        outcome.resize = true;
+        if self.composer_changes_pane_geometry() {
+            outcome.resize = true;
+        }
     }
 
     pub(super) fn composer_insert(&mut self, text: &str) {
         if let Some(composer) = self.composer.as_mut() {
-            composer.input.extend(text.chars().map(|character| {
-                if matches!(character, '\r' | '\n') {
-                    ' '
-                } else {
-                    character
-                }
-            }));
+            composer.input.insert(text);
             composer.notice = None;
+            composer.palette_index = 0;
         }
     }
 
@@ -218,17 +254,58 @@ impl ClientShellState {
             .modifiers
             .difference(crossterm::event::KeyModifiers::SHIFT)
             .is_empty();
+        let palette_len = self
+            .composer
+            .as_ref()
+            .and_then(|composer| crate::ke::slash::slash_palette(composer.input.as_str()))
+            .map(|hints| hints.len())
+            .unwrap_or(0);
         match key.code {
             KeyCode::Enter if plain && !empty => {
+                if self.composer_should_complete_palette() {
+                    self.apply_composer_palette();
+                }
                 self.submit_composer(outcome);
+                if self.composer_changes_pane_geometry() {
+                    outcome.resize = true;
+                }
+                true
+            }
+            KeyCode::Tab if plain && palette_len > 0 => {
+                self.apply_composer_palette();
+                outcome.repaint = true;
+                if self.composer_changes_pane_geometry() {
+                    outcome.resize = true;
+                }
+                true
+            }
+            KeyCode::Up if palette_len > 0 => {
+                if let Some(composer) = self.composer.as_mut() {
+                    composer.palette_index = composer.palette_index.saturating_sub(1);
+                }
+                outcome.repaint = true;
+                true
+            }
+            KeyCode::Down if palette_len > 0 => {
+                if let Some(composer) = self.composer.as_mut() {
+                    composer.palette_index = composer
+                        .palette_index
+                        .saturating_add(1)
+                        .min(palette_len.saturating_sub(1));
+                }
+                outcome.repaint = true;
                 true
             }
             KeyCode::Esc if !empty => {
                 if let Some(composer) = self.composer.as_mut() {
                     composer.input.clear();
                     composer.notice = None;
+                    composer.palette_index = 0;
                 }
                 outcome.repaint = true;
+                if self.composer_changes_pane_geometry() {
+                    outcome.resize = true;
+                }
                 true
             }
             KeyCode::Esc => {
@@ -253,36 +330,55 @@ impl ClientShellState {
                     false
                 }
             }
-            KeyCode::Backspace if !empty => {
-                if let Some(composer) = self.composer.as_mut() {
-                    composer.input.pop();
+            _ => {
+                let Some(composer) = self.composer.as_mut() else {
+                    return false;
+                };
+                let Some(_) = composer.input.handle_key(key) else {
+                    return false;
+                };
+                composer.notice = None;
+                composer.palette_index = 0;
+                outcome.repaint = true;
+                if self.composer_changes_pane_geometry() {
+                    outcome.resize = true;
                 }
-                outcome.repaint = true;
                 true
             }
-            KeyCode::Char('u')
-                if key
-                    .modifiers
-                    .contains(crossterm::event::KeyModifiers::CONTROL)
-                    && !empty =>
-            {
-                if let Some(composer) = self.composer.as_mut() {
-                    composer.input.clear();
-                }
-                outcome.repaint = true;
-                true
-            }
-            KeyCode::Char(character) if plain => {
-                let text = key
-                    .generated_text
-                    .clone()
-                    .unwrap_or_else(|| character.to_string());
-                self.composer_insert(&text);
-                outcome.repaint = true;
-                true
-            }
-            _ => false,
         }
+    }
+
+    fn composer_should_complete_palette(&self) -> bool {
+        let text = self
+            .composer
+            .as_ref()
+            .map(|composer| composer.input.as_str().trim().to_string())
+            .unwrap_or_default();
+        let Some(hints) = crate::ke::slash::slash_palette(&text) else {
+            return false;
+        };
+        if hints.iter().any(|hint| hint.fill == text) {
+            return false;
+        }
+        text != "/ke"
+    }
+
+    fn apply_composer_palette(&mut self) {
+        let Some(composer) = self.composer.as_mut() else {
+            return;
+        };
+        let Some(hints) = crate::ke::slash::slash_palette(composer.input.as_str()) else {
+            return;
+        };
+        let hint = hints
+            .get(composer.palette_index.min(hints.len().saturating_sub(1)))
+            .copied();
+        let Some(hint) = hint else {
+            return;
+        };
+        composer.input.clear();
+        composer.input.insert(hint.fill);
+        composer.palette_index = 0;
     }
 
     pub(super) fn composer_target(&self) -> Option<(String, Option<String>)> {
@@ -463,14 +559,23 @@ impl ClientShellState {
         self.composer.as_ref()?;
         let full = self.base_layout(cols, rows).pane_surface;
         let shrunk = self.layout(cols, rows).pane_surface;
-        (shrunk.height < full.height).then(|| {
-            Rect::new(
+        if shrunk.width < full.width {
+            Some(Rect::new(
+                shrunk.x.saturating_add(shrunk.width),
+                full.y,
+                full.width - shrunk.width,
+                full.height,
+            ))
+        } else if shrunk.height < full.height {
+            Some(Rect::new(
                 full.x,
                 shrunk.y.saturating_add(shrunk.height),
                 full.width,
                 full.height - shrunk.height,
-            )
-        })
+            ))
+        } else {
+            None
+        }
     }
 
     pub(super) fn handle_composer_mouse(
@@ -553,6 +658,19 @@ pub(super) fn render_composer(
     if area.height == 0 || area.width < 8 {
         return rendered;
     }
+    buffer.set_style(area, Style::default().bg(palette.panel_bg));
+    if area.height > COMPOSER_ROWS.saturating_add(2) {
+        for y in area.y..area.bottom() {
+            if let Some(cell) = buffer.cell_mut((area.x, y)) {
+                cell.set_symbol("│");
+                cell.set_style(
+                    Style::default()
+                        .fg(palette.surface_dim)
+                        .bg(palette.panel_bg),
+                );
+            }
+        }
+    }
     let status_style = Style::default().fg(palette.subtext0).bg(palette.panel_bg);
     let input_style = Style::default().fg(palette.text).bg(palette.surface0);
     let chat_style = Style::default().fg(palette.text).bg(palette.panel_bg);
@@ -561,13 +679,20 @@ pub(super) fn render_composer(
         .bg(palette.panel_bg)
         .add_modifier(Modifier::BOLD);
 
-    let input_y = area.y + area.height.saturating_sub(1);
-    rendered.input = Rect::new(area.x, input_y, area.width, 1);
-    let status_y = if area.height >= 2 {
+    let inner_width = usize::from(area.width.saturating_sub(4).max(1));
+    let visual_rows = input_visual_rows(composer.input.as_str(), inner_width)
+        .min(usize::from(INPUT_MAX_ROWS))
+        .max(1) as u16;
+    let hints = crate::ke::slash::slash_palette(composer.input.as_str()).unwrap_or_default();
+    let palette_rows = (hints.len() as u16).min(PALETTE_MAX_ROWS);
+    let input_y = area.y + area.height.saturating_sub(visual_rows);
+    rendered.input = Rect::new(area.x, input_y, area.width, visual_rows);
+    let status_y = if area.height >= visual_rows.saturating_add(1) {
         input_y.saturating_sub(1)
     } else {
         area.y
     };
+    let palette_y = status_y.saturating_sub(palette_rows);
 
     if composer.chat_expanded {
         if let Some(chat) = composer.chat.as_ref() {
@@ -581,7 +706,12 @@ pub(super) fn render_composer(
                 usize::from(header.width),
                 header_style,
             );
-            let body_height = status_y.saturating_sub(area.y.saturating_add(1));
+            let body_bottom = if palette_rows > 0 {
+                palette_y
+            } else {
+                status_y
+            };
+            let body_height = body_bottom.saturating_sub(area.y.saturating_add(1));
             if body_height > 0 {
                 let body = Rect::new(area.x, area.y.saturating_add(1), area.width, body_height);
                 rendered.chat = body;
@@ -621,6 +751,33 @@ pub(super) fn render_composer(
     } else {
         format!(" 壳 · {target} · Enter 发送 · Esc 收起")
     };
+    if palette_rows > 0 {
+        let selected = composer.palette_index.min(hints.len().saturating_sub(1));
+        for (index, hint) in hints.iter().take(usize::from(palette_rows)).enumerate() {
+            let y = palette_y.saturating_add(index as u16);
+            if y >= status_y {
+                break;
+            }
+            let row = Rect::new(area.x, y, area.width, 1);
+            let style = if index == selected {
+                Style::default()
+                    .fg(palette.panel_bg)
+                    .bg(palette.accent)
+                    .add_modifier(Modifier::BOLD)
+            } else {
+                Style::default().fg(palette.subtext0).bg(palette.surface0)
+            };
+            buffer.set_style(row, style);
+            buffer.set_stringn(
+                row.x,
+                y,
+                format!(" {}  {}", hint.fill, hint.label),
+                usize::from(row.width),
+                style,
+            );
+        }
+    }
+
     buffer.set_style(Rect::new(area.x, status_y, area.width, 1), status_style);
     buffer.set_stringn(
         area.x,
@@ -632,20 +789,46 @@ pub(super) fn render_composer(
 
     buffer.set_style(rendered.input, input_style);
     let prompt = if composer.focused { " › " } else { "   " };
-    let prompt_width = u16::try_from(UnicodeWidthStr::width(prompt)).unwrap_or(u16::MAX);
-    let available = usize::from(area.width.saturating_sub(prompt_width).saturating_sub(1));
-    let line = format!("{prompt}{}", fitting_tail(&composer.input, available));
-    buffer.set_stringn(area.x, input_y, &line, usize::from(area.width), input_style);
+    let lines = wrap_input_lines(composer.input.as_str(), inner_width);
+    let (cursor_row, cursor_col) = cursor_row_col(
+        composer.input.as_str(),
+        composer.input.cursor(),
+        inner_width,
+    );
+    let window = visible_input_window(lines.len(), cursor_row, usize::from(visual_rows));
+    for (offset, (start, end)) in lines
+        .iter()
+        .copied()
+        .skip(window)
+        .take(usize::from(visual_rows))
+        .enumerate()
+    {
+        let y = input_y.saturating_add(offset as u16);
+        let prefix = if offset == 0 && window == 0 {
+            prompt
+        } else {
+            "   "
+        };
+        let slice = &composer.input.as_str()[start..end];
+        buffer.set_stringn(
+            area.x,
+            y,
+            format!("{prefix}{slice}"),
+            usize::from(area.width),
+            input_style,
+        );
+    }
     if composer.focused {
-        let x = area
-            .x
-            .saturating_add(
-                u16::try_from(UnicodeWidthStr::width(line.as_str())).unwrap_or(u16::MAX),
-            )
-            .min(area.right().saturating_sub(1));
+        let visible_row = cursor_row.saturating_sub(window);
         rendered.cursor = Some(crate::protocol::CursorState {
-            x,
-            y: input_y,
+            x: area
+                .x
+                .saturating_add(3)
+                .saturating_add(cursor_col as u16)
+                .min(area.right().saturating_sub(1)),
+            y: input_y
+                .saturating_add(visible_row as u16)
+                .min(area.bottom().saturating_sub(1)),
             visible: true,
             shape: 0,
         });
@@ -653,16 +836,49 @@ pub(super) fn render_composer(
     rendered
 }
 
-fn fitting_tail(text: &str, width: usize) -> &str {
-    let mut used = 0usize;
-    let mut start = text.len();
-    for (index, character) in text.char_indices().rev() {
-        let char_width = unicode_width::UnicodeWidthChar::width(character).unwrap_or(0);
-        if used + char_width > width {
-            break;
-        }
-        used += char_width;
-        start = index;
+fn input_visual_rows(text: &str, width: usize) -> usize {
+    wrap_input_lines(text, width).len().max(1)
+}
+
+fn wrap_input_lines(text: &str, width: usize) -> Vec<(usize, usize)> {
+    if width == 0 {
+        return vec![(0, text.len())];
     }
-    &text[start..]
+    let mut lines = Vec::new();
+    let mut start = 0usize;
+    let mut used = 0usize;
+    for (index, grapheme) in text.grapheme_indices(true) {
+        let w = grapheme.width().max(1);
+        if used > 0 && used + w > width {
+            lines.push((start, index));
+            start = index;
+            used = 0;
+        }
+        used = used.saturating_add(w.min(width));
+    }
+    lines.push((start, text.len()));
+    lines
+}
+
+fn cursor_row_col(text: &str, cursor: usize, width: usize) -> (usize, usize) {
+    let cursor = cursor.min(text.len());
+    let lines = wrap_input_lines(text, width);
+    for (row, (start, end)) in lines.iter().copied().enumerate() {
+        if cursor >= start && cursor <= end {
+            let col = UnicodeWidthStr::width(&text[start..cursor]);
+            return (row, col);
+        }
+    }
+    let last = lines.len().saturating_sub(1);
+    (last, 0)
+}
+
+fn visible_input_window(line_count: usize, cursor_row: usize, max_rows: usize) -> usize {
+    if line_count <= max_rows {
+        return 0;
+    }
+    let max_start = line_count.saturating_sub(max_rows);
+    cursor_row
+        .saturating_sub(max_rows.saturating_sub(1))
+        .min(max_start)
 }

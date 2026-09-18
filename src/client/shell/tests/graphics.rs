@@ -149,7 +149,7 @@ fn notifications_and_clipboard_feedback_only_cover_their_drawn_corners() {
             let area = if layout.mobile_header.is_empty() {
                 layout.pane_surface
             } else {
-                Rect::new(0, 0, cols, rows)
+                state.chrome_toast_area(cols, rows)
             };
             let mut buffer = Buffer::empty(Rect::new(0, 0, cols, rows));
             let rect = crate::ui::render_copy_feedback_buffer(
@@ -281,6 +281,9 @@ fn every_dialog_and_menu_occludes_its_panel_not_the_whole_screen() {
             body: "body".into(),
             scroll: 0,
         }),
+        ClientShellOverlay::KeModel(super::super::ke_model::ClientKeModelOverlay::from_config(
+            &Config::default().ke,
+        )),
     ];
     for overlay in overlays {
         let mut state = ClientShellState::new(ClientShellConfig::from_config(&Config::default()));

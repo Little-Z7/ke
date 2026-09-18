@@ -1,12 +1,12 @@
 use std::{collections::BTreeSet, num::NonZeroUsize};
 
 use crossterm::event::KeyModifiers;
-use serde::{de, Deserialize, Deserializer, Serialize};
+use serde::{Deserialize, Deserializer, Serialize, de};
 
 use super::{
-    ActionKeybinds, BindingConfig, CommandKeybindConfig, IndexedKeybind, Keybinds, SidebarConfig,
-    SoundConfig, TabBarRightEntryConfig, ThemeConfig, DEFAULT_MOBILE_WIDTH_THRESHOLD,
-    DEFAULT_MOUSE_SCROLL_LINES, DEFAULT_SCROLLBACK_LIMIT_BYTES,
+    ActionKeybinds, BindingConfig, CommandKeybindConfig, DEFAULT_MOBILE_WIDTH_THRESHOLD,
+    DEFAULT_MOUSE_SCROLL_LINES, DEFAULT_SCROLLBACK_LIMIT_BYTES, IndexedKeybind, Keybinds,
+    SidebarConfig, SoundConfig, TabBarRightEntryConfig, ThemeConfig,
 };
 
 pub const MAX_TOAST_DELAY_SECONDS: u64 = 3600;
@@ -299,11 +299,7 @@ pub struct ConfigReloadReport {
 /// values are funneled through this helper before they reach any
 /// `u16::clamp(min, max)` call site (`u16::clamp` panics when `min > max`).
 pub fn validated_sidebar_bounds(min: u16, max: u16) -> Option<(u16, u16)> {
-    if min <= max {
-        Some((min, max))
-    } else {
-        None
-    }
+    if min <= max { Some((min, max)) } else { None }
 }
 
 #[derive(Debug, Default, Deserialize)]
@@ -388,10 +384,14 @@ pub struct KeModelProfile {
     pub base_url: String,
     /// Name of the environment variable holding the API key; the key itself never lives in config.
     pub api_key_env: String,
-    /// Model id sent to the provider.
+    /// Model id sent to the provider (cloud endpoint id is this field).
     pub model: String,
     /// For `provider = "cli"`: argv of the headless command; the prompt is passed on stdin.
     pub command: Vec<String>,
+    /// Thinking: empty = auto (local off, cloud omit); `off` / `on`.
+    pub think: String,
+    /// Chat Completions `max_tokens`. `0` omits the field.
+    pub max_tokens: u32,
 }
 
 impl KeModelProfile {
@@ -526,9 +526,8 @@ impl KeConfig {
                 KeModelProfile {
                     provider: "openai".into(),
                     base_url: "http://localhost:11434/v1".into(),
-                    api_key_env: String::new(),
                     model: "qwen3:4b".into(),
-                    command: Vec::new(),
+                    ..KeModelProfile::default()
                 },
             ));
         }

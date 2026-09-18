@@ -459,6 +459,12 @@ impl ClientShellState {
             return true;
         }
         match self.overlay.as_mut() {
+            Some(ClientShellOverlay::KeModel(form)) => {
+                if let Some(editor) = form.active_editor() {
+                    editor.insert(text);
+                }
+                true
+            }
             Some(ClientShellOverlay::Rename(rename)) => {
                 rename.input.insert(text);
                 true
@@ -486,6 +492,11 @@ impl ClientShellState {
         outcome: &mut ClientShellInput,
     ) {
         use crossterm::event::KeyModifiers;
+
+        if matches!(self.overlay, Some(ClientShellOverlay::KeModel(_))) {
+            self.handle_ke_model_key(key, outcome);
+            return;
+        }
 
         if matches!(self.overlay, Some(ClientShellOverlay::Onboarding)) {
             if matches!(

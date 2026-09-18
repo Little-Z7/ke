@@ -26,7 +26,7 @@ Windows (x86_64):
 powershell -ExecutionPolicy Bypass -c "irm https://github.com/Little-Z7/ke/releases/latest/download/ke-install.ps1 | iex"
 ```
 
-The Unix script installs `~/.local/bin/ke` (`KE_INSTALL_DIR` changes it). The Windows script installs `%LOCALAPPDATA%\Programs\ke\ke.exe` plus the ConPTY runtime and adds that folder to your user PATH. Both check the release `SHA256SUMS`. Set `KE_RELEASE_TAG=ke-v0.1.0` to pin a version. Run the installer again to update; `ke update` refuses on purpose and prints the matching command.
+The Unix script installs `~/.local/bin/ke` (`KE_INSTALL_DIR` changes it). The Windows script installs `%LOCALAPPDATA%\Programs\ke\ke.exe` plus the ConPTY runtime and adds that folder to your user PATH. Both check the release `SHA256SUMS`. Set `KE_RELEASE_TAG=ke-v0.1.0` to pin a version. `ke update` in the terminal runs that installer again (not the herdr update channel); restart `ke` afterwards. `KE_INSTALL_DIR` / `KE_RELEASE_TAG` / `KE_DOWNLOAD_BASE` apply to that update too.
 
 To build from source on Unix, run `scripts/ke-install.sh` in a checkout (needs Rust and the Zig version pinned in `vendor/libghostty-vt/build.zig.zon`, 0.16.0 for herdr 0.9.1). On Windows, use the zip installer above, or `cargo build --release` plus `scripts/package_windows_conpty.ps1` and install `herdr.exe` as `ke.exe`. Do not use `cargo install`: it would produce a binary named `herdr`.
 
@@ -41,12 +41,16 @@ ke can live on the same machine as an upstream Herdr install without touching it
 
 ## Composer bar
 
-Press `prefix+i` (configurable as `keys.toggle_composer`) to open a two-row bar under the pane surface. While it is open, typed and pasted text goes into the bar instead of the focused pane.
+Press `prefix+i` (configurable as `keys.toggle_composer`) to focus the ke dock. On desktop it is a right-hand column beside the pane (about 32 columns), with chat above the input; on a narrow screen (≤64 columns) it stays a two-row bar under the pane. While it is focused, typed and pasted text goes into the dock instead of the focused pane.
 
 - **Enter** hands the text to the processor, then submits the reply to the focused pane: `agent.prompt` for agent panes, `pane.send_input` followed by Enter for plain terminals.
 - **Esc** or **Ctrl+U** clears the bar; **Backspace** deletes.
 - With an **empty** bar, Enter, Esc, and Backspace still reach the pane, so an agent's own confirmations and interrupts keep working.
 - The status row shows the target pane and the processor's last note. Text typed while a submit is still processing is kept.
+- Long text wraps inside the bar, up to 6 rows, instead of disappearing off the left edge.
+- Typing `//` or `/ke` opens a slash-command palette above the bar: ↑↓ to choose, Tab to complete. Enter on a bare `/ke` still shows help and does not auto-complete to `/ke model`.
+- `/ke model` opens a model-settings popup. ←→ cycles access templates (local Ollama, Volcengine Ark / Coding Plan, OpenAI), then you can edit profile name, endpoint URL, model/endpoint id, API-key env var, thinking strength, and context `max_tokens`. For Ark, the model field can be an `ep-` endpoint id. These templates fill an OpenAI-compatible profile; they do not buy a subscription.
+- `/ke update` shows the current version and install command. To actually update, run `ke update` in the terminal (it runs the official installer, not the herdr channel).
 
 The bar never sends on its own. A click on a panel row (below) only fills the bar; you still press Enter.
 

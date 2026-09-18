@@ -40,9 +40,25 @@ struct CompletionRequest<'a> {
     messages: &'a [ChatMessage],
     stream: bool,
     /// Ollama extension. Local qwen3 spends the whole timeout on `delta.reasoning`
-    /// unless this is false; cloud OpenAI-compat servers must not see the field.
+    /// unless this is false; cloud OpenAI-compat servers must not see the field
+    /// unless the profile explicitly sets `think`.
     #[serde(skip_serializing_if = "Option::is_none")]
     think: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    max_tokens: Option<u32>,
+}
+
+/// `think` on the wire: explicit on/off, else local defaults to false and cloud omits.
+pub(crate) fn think_flag(profile: &KeModelProfile) -> Option<bool> {
+    match profile.think.trim() {
+        "on" | "true" => Some(true),
+        "off" | "false" => Some(false),
+        _ => profile.is_local().then_some(false),
+    }
+}
+
+fn max_tokens_flag(profile: &KeModelProfile) -> Option<u32> {
+    (profile.max_tokens > 0).then_some(profile.max_tokens)
 }
 
 /// `{base_url}/chat/completions` with trailing slashes on the base collapsed.
@@ -109,7 +125,8 @@ pub(crate) fn complete(
         model: &profile.model,
         messages,
         stream: true,
-        think: profile.is_local().then_some(false),
+        think: think_flag(profile),
+        max_tokens: max_tokens_flag(profile),
     })
     .map_err(|err| format!("序列化请求失败：{err}"))?;
 
@@ -324,7 +341,8 @@ mod tests {
             model: "qwen3:4b",
             messages: &[],
             stream: true,
-            think: local.is_local().then_some(false),
+            think: think_flag(&local),
+            max_tokens: None,
         })
         .unwrap();
         assert_eq!(local_json["think"], false);
@@ -333,19 +351,20 @@ mod tests {
             provider: "openai".into(),
             base_url: "https://ark.example/api/v3".into(),
             model: "doubao".into(),
+            think: "on".into(),
+            max_tokens: 2048,
             ..KeModelProfile::default()
         };
         let cloud_json = serde_json::to_value(&CompletionRequest {
             model: "doubao",
             messages: &[],
             stream: true,
-            think: cloud.is_local().then_some(false),
+            think: think_flag(&cloud),
+            max_tokens: (cloud.max_tokens > 0).then_some(cloud.max_tokens),
         })
         .unwrap();
-        assert!(
-            cloud_json.get("think").is_none(),
-            "cloud providers must not receive the Ollama think field"
-        );
+        assert_eq!(cloud_json["think"], true);
+        assert_eq!(cloud_json["max_tokens"], 2048);
     }
 
     #[test]

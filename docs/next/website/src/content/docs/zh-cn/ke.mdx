@@ -26,7 +26,7 @@ Windows（x86_64）：
 powershell -ExecutionPolicy Bypass -c "irm https://github.com/Little-Z7/ke/releases/latest/download/ke-install.ps1 | iex"
 ```
 
-Unix 脚本装到 `~/.local/bin/ke`（`KE_INSTALL_DIR` 可改）。Windows 脚本装到 `%LOCALAPPDATA%\Programs\ke\ke.exe`，并带上 ConPTY 运行时、把该目录加入用户 PATH。两者都会按发布里的 `SHA256SUMS` 校验。设置 `KE_RELEASE_TAG=ke-v0.1.0` 可固定版本。更新就是再运行一次；`ke update` 会有意拒绝，并把对应平台的安装命令打印出来。
+Unix 脚本装到 `~/.local/bin/ke`（`KE_INSTALL_DIR` 可改）。Windows 脚本装到 `%LOCALAPPDATA%\Programs\ke\ke.exe`，并带上 ConPTY 运行时、把该目录加入用户 PATH。两者都会按发布里的 `SHA256SUMS` 校验。设置 `KE_RELEASE_TAG=ke-v0.1.0` 可固定版本。终端里执行 `ke update` 会再跑一遍官方安装脚本（不走 herdr 的更新通道）；装完后重新启动 `ke`。`KE_INSTALL_DIR` / `KE_RELEASE_TAG` / `KE_DOWNLOAD_BASE` 对这次更新同样有效。
 
 Unix 上从源码安装请在仓库内运行 `scripts/ke-install.sh`（需要 Rust 与 `vendor/libghostty-vt/build.zig.zon` 里固定的 Zig 版本，herdr 0.9.1 对应 0.16.0）。Windows 请用上面的 zip 安装脚本，或 `cargo build --release` 再跑 `scripts/package_windows_conpty.ps1`，把 `herdr.exe` 装成 `ke.exe`。不要用 `cargo install`：它会装出一个叫 `herdr` 的二进制。
 
@@ -41,12 +41,16 @@ Unix 上从源码安装请在仓库内运行 `scripts/ke-install.sh`（需要 Ru
 
 ## 输入栏
 
-按 `prefix+i`（可通过 `keys.toggle_composer` 修改）在窗格区下方打开一个两行的输入栏。打开期间，键入和粘贴的文字进入输入栏而不是焦点窗格。
+按 `prefix+i`（可通过 `keys.toggle_composer` 修改）聚焦右侧的壳栏。桌面下壳占窗格右边一列（约 32 列），对话在上、输入在下；窄屏（≤64 列）仍用窗格下方的两行底栏。聚焦期间，键入和粘贴的文字进入壳栏而不是焦点窗格。
 
 - **Enter** 把文字交给处理进程，再把回复提交到焦点窗格：智能体窗格用 `agent.prompt`，普通终端用 `pane.send_input` 并附带 Enter。
 - **Esc** 或 **Ctrl+U** 清空输入栏；**Backspace** 删除。
 - 输入栏为**空**时，Enter、Esc、Backspace 仍然透传给窗格，智能体自己的确认提示和中断照常可用。
 - 状态行显示目标窗格和处理进程最近一次的说明。提交仍在处理时新键入的文字会保留。
+- 长文本在输入栏里自动折行，最多 6 行，不会从左侧消失。
+- 输入 `//` 或 `/ke` 时，底栏上方弹出快捷指令列表：↑↓ 选择，Tab 补全。单独的 `/ke` 回车仍是帮助，不会误补成 `/ke model`。
+- `/ke model` 打开模型配置弹层：←→ 切换接入模板（Ollama 本地、火山方舟 / Coding Plan、OpenAI），再改预设名、接口/端点、模型/端点 ID、密钥环境变量、思考强度、上下文 `max_tokens`。方舟可把模型改成 `ep-` 接入点 ID。这不是套餐购买，只是填好 OpenAI 兼容接口。
+- `/ke update` 显示当前版本和安装命令。真正更新请在终端跑 `ke update`（会执行官方安装脚本，不走 herdr 通道）。
 
 输入栏从不自行发送。点击面板行（见下）只是填入文字，仍需你按 Enter。
 

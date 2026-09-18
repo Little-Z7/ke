@@ -26,7 +26,7 @@ Windows（x86_64）:
 powershell -ExecutionPolicy Bypass -c "irm https://github.com/Little-Z7/ke/releases/latest/download/ke-install.ps1 | iex"
 ```
 
-Unix 向けスクリプトは `~/.local/bin/ke` に入れます（`KE_INSTALL_DIR` で変更可）。Windows 向けスクリプトは `%LOCALAPPDATA%\Programs\ke\ke.exe` と ConPTY ランタイムを入れ、そのフォルダをユーザー PATH に追加します。どちらもリリースの `SHA256SUMS` を確認します。`KE_RELEASE_TAG=ke-v0.1.0` でバージョンを固定できます。更新はもう一度実行するだけです。`ke update` は意図的に拒否し、その環境向けのインストールコマンドを表示します。
+Unix 向けスクリプトは `~/.local/bin/ke` に入れます（`KE_INSTALL_DIR` で変更可）。Windows 向けスクリプトは `%LOCALAPPDATA%\Programs\ke\ke.exe` と ConPTY ランタイムを入れ、そのフォルダをユーザー PATH に追加します。どちらもリリースの `SHA256SUMS` を確認します。`KE_RELEASE_TAG=ke-v0.1.0` でバージョンを固定できます。端末で `ke update` を実行すると、公式インストーラをもう一度走らせます（herdr の更新チャネルは使いません）。完了後に `ke` を再起動してください。`KE_INSTALL_DIR` / `KE_RELEASE_TAG` / `KE_DOWNLOAD_BASE` もこの更新に効きます。
 
 Unix でソースからビルドする場合はチェックアウト内で `scripts/ke-install.sh` を実行します（Rust と、`vendor/libghostty-vt/build.zig.zon` で固定された Zig が必要。herdr 0.9.1 では 0.16.0）。Windows では上の zip インストーラを使うか、`cargo build --release` のあと `scripts/package_windows_conpty.ps1` を実行し、`herdr.exe` を `ke.exe` として入れてください。`cargo install` は使わないでください。`herdr` という名前のバイナリができてしまいます。
 
@@ -41,12 +41,16 @@ ke は上流の Herdr がインストールされた同じマシンで、それ�
 
 ## コンポーザーバー
 
-`prefix+i`（`keys.toggle_composer` で変更可）でペイン面の下に 2 行のバーを開きます。開いている間、入力や貼り付けたテキストはフォーカス中のペインではなくバーに入ります。
+`prefix+i`（`keys.toggle_composer` で変更可）で右側の ke ドックにフォーカスします。デスクトップではペイン右の約 32 列（上がチャット、下が入力）、狭い画面（≤64 列）では従来どおりペイン下の 2 行バーです。フォーカス中、入力や貼り付けたテキストはペインではなくドックに入ります。
 
 - **Enter** はテキストをプロセッサーに渡し、その返答をフォーカス中のペインへ送ります。エージェントペインには `agent.prompt`、通常のターミナルには `pane.send_input` と Enter を使います。
 - **Esc** または **Ctrl+U** でバーをクリア、**Backspace** で削除します。
 - バーが**空**のときは Enter、Esc、Backspace はそのままペインに届くので、エージェント自身の確認や中断は引き続き機能します。
 - ステータス行には対象ペインとプロセッサーの最新のメモが表示されます。送信処理中に入力したテキストは保持されます。
+- 長いテキストはバー内で折り返し、最大 6 行まで伸びます。左端から消えることはありません。
+- `//` または `/ke` を入力すると、バーの上にスラッシュコマンド一覧が出ます。↑↓ で選び、Tab で補完します。`/ke` だけの Enter はヘルプのまま、`/ke model` へ自動補完しません。
+- `/ke model` はモデル設定ポップアップを開きます。←→ で接続テンプレート（ローカル Ollama、火山方舟 / Coding Plan、OpenAI）を切り替え、プリセット名、エンドポイント URL、モデル/エンドポイント ID、API キー環境変数、思考の強さ、コンテキスト `max_tokens` を編集します。方舟ではモデル欄を `ep-` エンドポイント ID にできます。テンプレートは OpenAI 互換の記入であり、プランの購入ではありません。
+- `/ke update` は現在のバージョンとインストールコマンドを表示します。実際の更新は端末で `ke update` を実行します（公式インストーラを走らせ、herdr チャネルは使いません）。
 
 バーが勝手に送信することはありません。パネル行のクリック（後述）はバーにテキストを入れるだけで、Enter は自分で押します。
 

@@ -295,7 +295,8 @@ pub(super) enum ClientShellOverlayKind {
     ContextMenu,
     GlobalMenu,
     Settings,
-    KeChat, // Modified by ke
+    KeChat,  // Modified by ke
+    KeModel, // Modified by ke
 }
 
 #[derive(Debug)]
@@ -594,6 +595,7 @@ pub(super) enum ClientShellOverlay {
     Settings(ClientSettingsOverlay),
     #[allow(dead_code)] // still rendered if opened; default view is the composer dock
     KeChat(super::ke_chat::ClientKeChatOverlay), // Modified by ke
+    KeModel(super::ke_model::ClientKeModelOverlay), // Modified by ke
 }
 
 impl ClientShellOverlay {
@@ -613,6 +615,7 @@ impl ClientShellOverlay {
             Self::GlobalMenu(_) => ClientShellOverlayKind::GlobalMenu,
             Self::Settings(_) => ClientShellOverlayKind::Settings,
             Self::KeChat(_) => ClientShellOverlayKind::KeChat, // Modified by ke
+            Self::KeModel(_) => ClientShellOverlayKind::KeModel, // Modified by ke
         }
     }
 }
@@ -1214,14 +1217,35 @@ impl ClientShellState {
         )
     }
 
-    // Modified by ke: reserve rows under the pane surface for the composer bar while it is open.
+    // Modified by ke: reserve the right column (desktop) or bottom rows (mobile) for the composer.
     pub(super) fn layout(&self, cols: u16, rows: u16) -> ClientShellLayout {
         let mut layout = self.base_layout(cols, rows);
-        let reserved = self.composer_reserved_rows();
-        if reserved > 0 && layout.pane_surface.height > reserved + 2 {
-            layout.pane_surface.height -= reserved;
+        if self.composer.is_none() {
+            return layout;
+        }
+        if self.composer_dock_on_right(cols, rows) {
+            let reserved = super::composer::COMPOSER_COLS;
+            if layout.pane_surface.width > reserved + super::composer::COMPOSER_MIN_PANE_COLS {
+                layout.pane_surface.width = layout.pane_surface.width.saturating_sub(reserved);
+            }
+        } else {
+            let reserved = self.composer_reserved_rows_for(layout.pane_surface.width);
+            if reserved > 0 && layout.pane_surface.height > reserved + 2 {
+                layout.pane_surface.height -= reserved;
+            }
         }
         layout
+    }
+
+    /// Window chrome that toasts may occupy, excluding the composer dock.
+    pub(super) fn chrome_toast_area(&self, cols: u16, rows: u16) -> Rect {
+        if self.composer_dock_on_right(cols, rows) {
+            let pane = self.layout(cols, rows).pane_surface;
+            return Rect::new(0, 0, pane.right().max(1), rows);
+        }
+        let reserved =
+            self.composer_reserved_rows_for(self.base_layout(cols, rows).pane_surface.width);
+        Rect::new(0, 0, cols, rows.saturating_sub(reserved))
     }
 
     pub(crate) fn surface_size(&self, cols: u16, rows: u16) -> ClientSurfaceSize {

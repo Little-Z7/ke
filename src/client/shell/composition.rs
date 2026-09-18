@@ -490,7 +490,7 @@ impl ClientShellState {
                 self.hits.notification_toast = if layout.mobile_header.is_empty() {
                     endpoint_notices::render_notice(
                         &mut composed,
-                        Rect::new(0, 0, cols, rows),
+                        self.chrome_toast_area(cols, rows),
                         notice,
                         u16::from(has_config_diagnostic) + lifecycle_offset,
                         &self.config.palette,
@@ -498,7 +498,7 @@ impl ClientShellState {
                 } else {
                     endpoint_notices::render_mobile_banner(
                         &mut composed,
-                        Rect::new(0, 0, cols, rows),
+                        self.chrome_toast_area(cols, rows),
                         notice,
                         has_config_diagnostic || lifecycle_offset > 0,
                         &self.config.palette,
@@ -508,7 +508,7 @@ impl ClientShellState {
                 self.hits.notification_toast = if layout.mobile_header.is_empty() {
                     notifications::render_visible_notification(
                         &mut composed,
-                        Rect::new(0, 0, cols, rows),
+                        self.chrome_toast_area(cols, rows),
                         notification,
                         self.config.toast_position,
                         u16::from(has_config_diagnostic) + lifecycle_offset,
@@ -517,7 +517,7 @@ impl ClientShellState {
                 } else {
                     notifications::render_mobile_notification_banner(
                         &mut composed,
-                        Rect::new(0, 0, cols, rows),
+                        self.chrome_toast_area(cols, rows),
                         notification,
                         has_config_diagnostic || lifecycle_offset > 0,
                         &self.config.palette,
@@ -534,7 +534,7 @@ impl ClientShellState {
             let feedback_area = if layout.mobile_header.is_empty() {
                 layout.pane_surface
             } else {
-                Rect::new(0, 0, cols, rows)
+                self.chrome_toast_area(cols, rows)
             };
             let offset = crate::ui::copy_feedback_offset_for_toast(
                 feedback_area,

@@ -40,6 +40,7 @@ mod worktrees;
 mod composer;
 mod ke_chat;
 mod ke_cmd;
+mod ke_model;
 mod ke_panel;
 use text_editor::TextEditor;
 use word_selection::ClientWordSelection;

@@ -1,17 +1,179 @@
 //! Added by ke: `/ke` commands and `//` passthrough, parsed on the client before the processor.
 
-use crate::config::{upsert_section_value, KeConfig, KeModelProfile};
+use crate::config::{KeConfig, KeModelProfile, upsert_section_bool, upsert_section_value};
 
 pub(crate) const HELP: &str = "\
 /ke help
-/ke model [预设名|模型id]
+/ke model            打开模型配置
+/ke model [预设名|模板|模型id]
 /ke provider <名> openai <base_url> <KEY_ENV>
 /ke prompt
 /ke memory
 /ke log
 /ke status
-//命令     去掉一个 / 后发给当前窗格
-@ke 话     问管家";
+/ke update           终端 ke update 的安装命令
+//               窗格斜杠指令（Tab 补全）
+@ke 话           问管家";
+
+/// Built-in OpenAI-compatible access templates. These are not subscription products.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct PlanTemplate {
+    pub name: &'static str,
+    pub label: &'static str,
+    pub base_url: &'static str,
+    pub model: &'static str,
+    pub api_key_env: &'static str,
+}
+
+pub(crate) const PLAN_TEMPLATES: &[PlanTemplate] = &[
+    PlanTemplate {
+        name: "local",
+        label: "Ollama 本地",
+        base_url: "http://localhost:11434/v1",
+        model: "qwen3:4b",
+        api_key_env: "",
+    },
+    PlanTemplate {
+        name: "ark",
+        label: "火山方舟 / Coding Plan",
+        base_url: "https://ark.cn-beijing.volces.com/api/v3",
+        model: "doubao-seed-1-6",
+        api_key_env: "ARK_API_KEY",
+    },
+    PlanTemplate {
+        name: "openai",
+        label: "OpenAI",
+        base_url: "https://api.openai.com/v1",
+        model: "gpt-4o",
+        api_key_env: "OPENAI_API_KEY",
+    },
+];
+
+pub(crate) fn plan_template(name: &str) -> Option<&'static PlanTemplate> {
+    PLAN_TEMPLATES.iter().find(|plan| plan.name == name)
+}
+
+impl PlanTemplate {
+    pub(crate) fn profile(self) -> KeModelProfile {
+        KeModelProfile {
+            provider: "openai".into(),
+            base_url: self.base_url.into(),
+            api_key_env: self.api_key_env.into(),
+            model: self.model.into(),
+            ..KeModelProfile::default()
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct SlashHint {
+    pub fill: &'static str,
+    pub label: &'static str,
+}
+
+pub(crate) const KE_SLASH_HINTS: &[SlashHint] = &[
+    SlashHint {
+        fill: "/ke model",
+        label: "模型配置",
+    },
+    SlashHint {
+        fill: "/ke status",
+        label: "管家状态",
+    },
+    SlashHint {
+        fill: "/ke update",
+        label: "更新命令",
+    },
+    SlashHint {
+        fill: "/ke log",
+        label: "最近对话",
+    },
+    SlashHint {
+        fill: "/ke prompt",
+        label: "提示词文件",
+    },
+    SlashHint {
+        fill: "/ke memory",
+        label: "记忆文件",
+    },
+    SlashHint {
+        fill: "/ke help",
+        label: "命令列表",
+    },
+    SlashHint {
+        fill: "/ke provider",
+        label: "新建接口预设",
+    },
+];
+
+pub(crate) const PANE_SLASH_HINTS: &[SlashHint] = &[
+    SlashHint {
+        fill: "//clear",
+        label: "清对话",
+    },
+    SlashHint {
+        fill: "//compact",
+        label: "压缩上下文",
+    },
+    SlashHint {
+        fill: "//help",
+        label: "帮助",
+    },
+    SlashHint {
+        fill: "//status",
+        label: "状态",
+    },
+    SlashHint {
+        fill: "//model",
+        label: "切模型",
+    },
+    SlashHint {
+        fill: "//cost",
+        label: "用量",
+    },
+    SlashHint {
+        fill: "//memory",
+        label: "记忆",
+    },
+    SlashHint {
+        fill: "//init",
+        label: "初始化",
+    },
+    SlashHint {
+        fill: "//review",
+        label: "回顾",
+    },
+    SlashHint {
+        fill: "//exit",
+        label: "退出",
+    },
+];
+
+/// Hints for a composer line that is `/ke…` or `//…`.
+pub(crate) fn slash_palette(text: &str) -> Option<Vec<SlashHint>> {
+    let text = text.trim();
+    let (hints, query) = if text == "/ke" || text.starts_with("/ke ") {
+        (
+            KE_SLASH_HINTS,
+            text.strip_prefix("/ke").unwrap_or("").trim(),
+        )
+    } else if text.starts_with("//") {
+        (PANE_SLASH_HINTS, text.strip_prefix("//").unwrap_or(""))
+    } else {
+        return None;
+    };
+    let query = query.to_ascii_lowercase();
+    let hits: Vec<SlashHint> = hints
+        .iter()
+        .copied()
+        .filter(|hint| {
+            query.is_empty()
+                || hint.fill.to_ascii_lowercase().contains(&query)
+                || hint.label.contains(&query)
+        })
+        .collect();
+    (!hits.is_empty()).then_some(hits)
+}
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) enum SlashCommand {
@@ -20,6 +182,7 @@ pub(crate) enum SlashCommand {
     Log,
     Prompt,
     Memory,
+    Update,
     Model {
         arg: Option<String>,
     },
@@ -54,6 +217,7 @@ pub(crate) fn parse_ke_command(text: &str) -> Option<SlashCommand> {
         "log" => SlashCommand::Log,
         "prompt" => SlashCommand::Prompt,
         "memory" => SlashCommand::Memory,
+        "update" => SlashCommand::Update,
         "model" => SlashCommand::Model {
             arg: parts.next().map(str::to_string),
         },
@@ -138,6 +302,42 @@ pub(crate) fn apply_provider(content: &str, name: &str, base_url: &str, key_env:
     upsert_section_value(&next, &section, "api_key_env", &toml_quote(key_env))
 }
 
+pub(crate) fn apply_model_form(
+    content: &str,
+    enabled: bool,
+    name: &str,
+    profile: &KeModelProfile,
+    cloud_confirmed: bool,
+) -> String {
+    let mut next = upsert_section_bool(content, "ke.model", "enabled", enabled);
+    next = upsert_section_value(&next, "ke.model", "active", &toml_quote(name));
+    if cloud_confirmed {
+        next = upsert_section_bool(&next, "ke.model", "cloud_confirmed", true);
+    }
+    let section = format!("ke.model.profiles.{name}");
+    next = upsert_section_value(&next, &section, "provider", &toml_quote("openai"));
+    next = upsert_section_value(&next, &section, "base_url", &toml_quote(&profile.base_url));
+    next = upsert_section_value(
+        &next,
+        &section,
+        "api_key_env",
+        &toml_quote(&profile.api_key_env),
+    );
+    next = upsert_section_value(&next, &section, "model", &toml_quote(&profile.model));
+    next = upsert_section_value(&next, &section, "think", &toml_quote(&profile.think));
+    upsert_section_value(
+        &next,
+        &section,
+        "max_tokens",
+        &profile.max_tokens.to_string(),
+    )
+}
+
+pub(crate) fn apply_plan_template(content: &str, plan: &PlanTemplate) -> String {
+    let profile = plan.profile();
+    apply_model_form(content, true, plan.name, &profile, !profile.is_local())
+}
+
 pub(crate) fn describe_model(ke: &KeConfig) -> String {
     let mut lines = Vec::new();
     match ke.resolved_profile() {
@@ -168,7 +368,24 @@ pub(crate) fn describe_model(ke: &KeConfig) -> String {
         let names: Vec<_> = ke.model.profiles.keys().map(String::as_str).collect();
         lines.push(format!("可切换预设：{}", names.join("、")));
     }
+    lines.push(format!(
+        "接入模板：{}",
+        PLAN_TEMPLATES
+            .iter()
+            .map(|plan| format!("{}（{}）", plan.name, plan.label))
+            .collect::<Vec<_>>()
+            .join("、")
+    ));
     lines.join("\n")
+}
+
+/// Text for `/ke update`: the same installer `ke update` runs in the terminal.
+pub(crate) fn update_text() -> String {
+    format!(
+        "当前版本 ke {}\n终端执行 ke update 会跑官方安装脚本（不走 herdr 更新通道）：\n{}",
+        crate::build_info::KE_VERSION,
+        crate::build_info::KE_INSTALL_COMMAND
+    )
 }
 
 #[cfg(test)]
@@ -180,6 +397,7 @@ mod tests {
         assert_eq!(parse_ke_command("/ke"), Some(SlashCommand::Help));
         assert_eq!(parse_ke_command("  /ke help  "), Some(SlashCommand::Help));
         assert_eq!(parse_ke_command("/ke log"), Some(SlashCommand::Log));
+        assert_eq!(parse_ke_command("/ke update"), Some(SlashCommand::Update));
         assert_eq!(
             parse_ke_command("/ke model"),
             Some(SlashCommand::Model { arg: None })
@@ -236,14 +454,38 @@ mod tests {
             &KeModelProfile {
                 provider: "openai".into(),
                 base_url: "http://localhost:11434/v1".into(),
-                api_key_env: String::new(),
                 model: "qwen3:4b".into(),
-                command: Vec::new(),
+                ..KeModelProfile::default()
             },
             "qwen3:8b",
         );
         assert!(next.contains("model = \"qwen3:8b\""));
         assert!(next.contains("base_url = \"http://localhost:11434/v1\""));
+        let form = apply_model_form(
+            "",
+            true,
+            "ark",
+            &KeModelProfile {
+                provider: "openai".into(),
+                base_url: "https://example/v3".into(),
+                api_key_env: "ARK_API_KEY".into(),
+                model: "ep-demo".into(),
+                think: "on".into(),
+                max_tokens: 4096,
+                ..KeModelProfile::default()
+            },
+            true,
+        );
+        assert!(form.contains("enabled = true"));
+        assert!(form.contains("cloud_confirmed = true"));
+        assert!(form.contains("model = \"ep-demo\""));
+        assert!(form.contains("think = \"on\""));
+        assert!(form.contains("max_tokens = 4096"));
+        let plan = apply_plan_template("", plan_template("ark").expect("ark"));
+        assert!(plan.contains("active = \"ark\""));
+        assert!(plan.contains("ark.cn-beijing.volces.com"));
+        assert!(plan.contains("ARK_API_KEY"));
+        assert!(plan.contains("cloud_confirmed = true"));
     }
 
     #[test]
@@ -253,5 +495,20 @@ mod tests {
         assert!(!profile_name_ok("a.b"));
         assert!(!profile_name_ok("a b"));
         assert!(!profile_name_ok(""));
+    }
+
+    #[test]
+    fn slash_palette_filters_ke_and_pane_hints() {
+        let ke = slash_palette("/ke").expect("ke palette");
+        assert!(ke.iter().any(|hint| hint.fill == "/ke model"));
+        assert!(ke.iter().any(|hint| hint.fill == "/ke update"));
+        let model = slash_palette("/ke mo").expect("filter");
+        let update = slash_palette("/ke up").expect("update");
+        assert_eq!(update[0].fill, "/ke update");
+        assert_eq!(model[0].fill, "/ke model");
+        let pane = slash_palette("//cl").expect("pane palette");
+        assert_eq!(pane[0].fill, "//clear");
+        assert!(slash_palette("/compact").is_none());
+        assert!(slash_palette("@ke").is_none());
     }
 }

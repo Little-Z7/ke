@@ -1,6 +1,6 @@
 // Modified by ke: tests for the native composer bar (壳输入栏).
 use super::super::composer::{
-    ComposerHook, ComposerReply, ComposerRequest, COMPOSER_ROWS, PENDING_LIMIT,
+    COMPOSER_COLS, COMPOSER_ROWS, ComposerHook, ComposerReply, ComposerRequest, PENDING_LIMIT,
 };
 use super::*;
 
@@ -90,46 +90,44 @@ fn pane_input_requests(out: &ClientShellInput) -> usize {
 }
 
 #[test]
-fn toggle_reserves_rows_under_the_pane_surface() {
+fn toggle_reserves_the_right_column() {
     let mut state = ClientShellState::new(ClientShellConfig::from_config(&Config::default()));
     state.set_snapshot(Box::new(snapshot()));
     assert!(state.composer.is_some(), "the dock is always on screen");
-    assert!(state
-        .composer_area(120, 40)
-        .is_some_and(|area| area.height == COMPOSER_ROWS));
+    let pane = state.layout(120, 40).pane_surface;
+    let area = state.composer_area(120, 40).expect("dock");
+    assert_eq!(area.width, COMPOSER_COLS);
+    assert_eq!(area.x, pane.right());
+    assert_eq!(area.height, pane.height);
     let closed_focus = state.composer.as_ref().unwrap().focused;
     assert!(!closed_focus);
     let out = toggle(&mut state);
-    assert!(out.resize && state.composer.as_ref().unwrap().focused);
-    assert!(state
-        .composer_area(120, 40)
-        .is_some_and(|area| area.height == COMPOSER_ROWS));
+    assert!(state.composer.as_ref().unwrap().focused);
+    assert!(out.repaint);
+    let area = state.composer_area(120, 40).expect("dock");
+    assert_eq!(area.width, COMPOSER_COLS);
     let out = toggle(&mut state);
-    assert!(out.resize && !state.composer.as_ref().unwrap().focused);
+    assert!(!state.composer.as_ref().unwrap().focused);
+    assert!(out.repaint);
 }
 
 #[test]
-fn expanded_ke_chat_grows_the_dock() {
-    use super::super::composer::CHAT_ROWS;
+fn expanded_ke_chat_stays_inside_the_right_dock() {
     use super::super::ke_chat::ClientKeChatOverlay;
     let mut state = state_with_composer(None, fake_send);
-    assert!(state
-        .composer_area(120, 40)
-        .is_some_and(|area| area.height == COMPOSER_ROWS));
+    let idle = state.composer_area(120, 40).expect("dock");
+    assert_eq!(idle.width, COMPOSER_COLS);
     state.set_composer_chat(ClientKeChatOverlay {
         title: "管家".into(),
         body: "codex 空着".into(),
         scroll: 0,
     });
-    assert!(state
-        .composer_area(120, 40)
-        .is_some_and(|area| area.height == COMPOSER_ROWS + CHAT_ROWS));
+    let open = state.composer_area(120, 40).expect("dock");
+    assert_eq!(open, idle, "chat should expand inside the right dock");
     let mut out = ClientShellInput::default();
     state.toggle_composer_chat(&mut out);
-    assert!(out.resize);
-    assert!(state
-        .composer_area(120, 40)
-        .is_some_and(|area| area.height == COMPOSER_ROWS));
+    assert!(out.repaint);
+    assert_eq!(state.composer_area(120, 40).expect("dock"), idle);
 }
 
 #[test]
@@ -185,7 +183,7 @@ fn blocked_text_is_kept_and_nothing_is_sent() {
     assert!(out.actions.is_empty());
     assert_eq!(pane_input_requests(&out), 0);
     let composer = state.composer.as_ref().expect("composer");
-    assert_eq!(composer.input, "secret");
+    assert_eq!(composer.input.as_str(), "secret");
     assert_eq!(composer.notice.as_deref(), Some("processor down"));
 }
 
@@ -269,7 +267,7 @@ fn slow_processor_completes_from_the_timer_and_keeps_new_typing() {
         crate::api::schema::Method::AgentPrompt(params) if params.text == "[slow]slow"
     ));
     assert_eq!(
-        state.composer.as_ref().unwrap().input,
+        state.composer.as_ref().unwrap().input.as_str(),
         "slowx",
         "text typed while processing is kept"
     );
@@ -353,7 +351,7 @@ fn unresponsive_processor_times_out_as_a_block() {
     assert!(out.actions.is_empty());
     assert!(state.composer_pending.is_none());
     let composer = state.composer.as_ref().unwrap();
-    assert_eq!(composer.input, "secret");
+    assert_eq!(composer.input.as_str(), "secret");
     assert_eq!(
         composer.notice.as_deref(),
         Some("处理进程无响应，未发送，原文保留")
@@ -374,10 +372,28 @@ fn ke_slash_help_stays_in_the_dock_and_sends_nothing() {
         composer.chat.as_ref().map(|chat| chat.title.as_str()),
         Some("壳命令")
     );
-    assert!(composer
-        .chat
-        .as_ref()
-        .is_some_and(|chat| chat.body.contains("/ke model")));
+    assert!(
+        composer
+            .chat
+            .as_ref()
+            .is_some_and(|chat| chat.body.contains("/ke model"))
+    );
+}
+
+#[test]
+fn ke_slash_update_shows_the_install_command() {
+    let mut state = state_with_composer(None, fake_send);
+    state.handle_input_bytes(b"/ke update");
+    let out = submit(&mut state);
+    assert!(out.actions.is_empty());
+    let composer = state.composer.as_ref().expect("composer");
+    assert_eq!(
+        composer.chat.as_ref().map(|chat| chat.title.as_str()),
+        Some("壳更新")
+    );
+    assert!(composer.chat.as_ref().is_some_and(|chat| {
+        chat.body.contains(crate::build_info::KE_VERSION) && chat.body.contains("ke-install")
+    }));
 }
 
 #[test]
@@ -425,8 +441,90 @@ fn ke_chat_binding_prefills_mention() {
             .map(|composer| composer.input.as_str()),
         Some("@ke ")
     );
-    assert!(state
-        .composer
-        .as_ref()
-        .is_some_and(|composer| composer.focused));
+    assert!(
+        state
+            .composer
+            .as_ref()
+            .is_some_and(|composer| composer.focused)
+    );
+}
+
+#[test]
+fn long_composer_text_grows_the_mobile_dock() {
+    let mut state = state_with_composer(None, fake_send);
+    state.handle_input_bytes(&[b'x'; 160]);
+    let tall = state.composer_area(40, 40).expect("dock").height;
+    assert!(
+        tall > COMPOSER_ROWS,
+        "wrapped input should reserve more than the idle two rows, got {tall}"
+    );
+    assert!(tall <= COMPOSER_ROWS + super::super::composer::INPUT_MAX_ROWS);
+}
+
+#[test]
+fn double_slash_opens_a_command_palette() {
+    let mut state = state_with_composer(Some("claude"), fake_send);
+    let idle = state.composer_area(40, 40).expect("dock").height;
+    state.handle_input_bytes(b"//");
+    let tall = state.composer_area(40, 40).expect("dock").height;
+    assert!(
+        tall > idle,
+        "typing // should grow the mobile dock for the slash palette, idle={idle} tall={tall}"
+    );
+    let desktop = state.composer_area(120, 40).expect("right dock");
+    assert_eq!(desktop.width, COMPOSER_COLS);
+}
+
+#[test]
+fn slash_palette_tab_completes_a_pane_command() {
+    let mut state = state_with_composer(Some("claude"), fake_send);
+    state.handle_input_bytes(b"//cl");
+    let mut out = ClientShellInput::default();
+    assert!(state.composer_handle_key(
+        &crate::input::TerminalKey::new(
+            crossterm::event::KeyCode::Tab,
+            crossterm::event::KeyModifiers::NONE
+        ),
+        &mut out
+    ));
+    assert_eq!(
+        state
+            .composer
+            .as_ref()
+            .map(|composer| composer.input.as_str()),
+        Some("//clear")
+    );
+}
+
+#[test]
+fn ke_model_opens_the_form_overlay() {
+    let mut state = state_with_composer(None, fake_send);
+    state.handle_input_bytes(b"/ke model");
+    let _ = submit(&mut state);
+    assert!(matches!(
+        state.overlay,
+        Some(ClientShellOverlay::KeModel(_))
+    ));
+}
+
+#[test]
+fn ke_model_plan_cycle_fills_ark() {
+    let mut state = state_with_composer(None, fake_send);
+    state.handle_input_bytes(b"/ke model");
+    let _ = submit(&mut state);
+    let mut out = ClientShellInput::default();
+    assert!(state.handle_ke_model_key(
+        &crate::input::TerminalKey::new(
+            crossterm::event::KeyCode::Right,
+            crossterm::event::KeyModifiers::NONE
+        ),
+        &mut out
+    ));
+    let Some(ClientShellOverlay::KeModel(form)) = state.overlay.as_ref() else {
+        panic!("model form");
+    };
+    assert_eq!(form.name.as_str(), "ark");
+    assert!(form.base_url.as_str().contains("ark.cn-beijing"));
+    assert_eq!(form.api_key_env.as_str(), "ARK_API_KEY");
+    assert_eq!(form.plan_label(), "火山方舟 / Coding Plan");
 }

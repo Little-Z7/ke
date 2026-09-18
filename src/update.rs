@@ -1114,7 +1114,7 @@ pub(crate) fn parse_self_update_args(args: &[String]) -> Result<SelfUpdateOption
         match arg.as_str() {
             "--handoff" => options.live_handoff = true,
             "--help" | "-h" => {
-                return Err("usage: herdr update [--handoff]".to_string());
+                return Err("usage: ke update".to_string());
             }
             _ => return Err(format!("unknown update option: {arg}")),
         }
@@ -1970,7 +1970,9 @@ fn preview_channel_rejection_for_exe_path(path: &Path) -> Option<&'static str> {
             "preview channel is only available for direct Herdr installs; mise installs update through `mise upgrade herdr`",
         )
     } else if is_nix_store_exe_path_following_links(path) {
-        Some("preview channel is only available for direct Herdr installs; Nix installs update through Nix")
+        Some(
+            "preview channel is only available for direct Herdr installs; Nix installs update through Nix",
+        )
     } else {
         None
     }
@@ -2109,16 +2111,63 @@ fn homebrew_cellar_keg_root(path: &Path) -> Option<PathBuf> {
 // ---------------------------------------------------------------------------
 
 /// Manual self-update command (`herdr update`).
-// Modified by ke: ke never self-updates, so an upstream herdr release can never replace the ke binary.
+// Modified by ke: never use herdr.dev manifests. `ke update` runs the ke release installer instead.
 pub(crate) const KE_DISABLE_SELF_UPDATE: bool = true;
+
+/// Terminal `ke update`: fetch and run the ke installer (not herdr's update channel).
+pub fn ke_release_update() -> Result<Version, String> {
+    eprintln!(
+        "updating ke {} with the release installer...",
+        crate::build_info::KE_VERSION
+    );
+    eprintln!("{}", crate::build_info::KE_INSTALL_COMMAND);
+    let status = ke_installer_command()
+        .status()
+        .map_err(|err| format!("could not start ke installer: {err}"))?;
+    if !status.success() {
+        return Err(format!(
+            "installer failed{}. retry with: {}",
+            status
+                .code()
+                .map(|code| format!(" (exit {code})"))
+                .unwrap_or_default(),
+            crate::build_info::KE_INSTALL_COMMAND
+        ));
+    }
+    eprintln!("restart ke to use the new binary");
+    Ok(Version::parse(crate::build_info::KE_VERSION).unwrap_or_else(Version::current))
+}
+
+pub(crate) fn ke_installer_command() -> Command {
+    #[cfg(windows)]
+    {
+        let mut command = Command::new("powershell");
+        command.args([
+            "-ExecutionPolicy",
+            "Bypass",
+            "-Command",
+            &format!("irm {} | iex", crate::build_info::KE_INSTALL_SCRIPT_URL),
+        ]);
+        command
+    }
+    #[cfg(not(windows))]
+    {
+        let mut command = Command::new("sh");
+        command.arg("-c").arg(format!(
+            "curl -fsSL {} | sh",
+            crate::build_info::KE_INSTALL_SCRIPT_URL
+        ));
+        command
+    }
+}
 
 pub fn self_update(options: SelfUpdateOptions) -> Result<Version, String> {
     if KE_DISABLE_SELF_UPDATE {
         let _ = &options;
-        return Err(format!(
-            "ke does not self-update; install the latest release with: {}",
-            crate::build_info::KE_INSTALL_COMMAND
-        ));
+        return Err(
+            "ke does not use the herdr update channel; run `ke update` to install the latest ke release"
+                .into(),
+        );
     }
     let channel = UpdateChannel::configured();
 
@@ -2411,8 +2460,8 @@ mod tests {
     use super::*;
     use std::os::unix::net::UnixListener;
     use std::sync::{
-        atomic::{AtomicBool, Ordering},
         Arc,
+        atomic::{AtomicBool, Ordering},
     };
     use std::sync::{Mutex, OnceLock};
     use std::thread;
@@ -2682,12 +2731,18 @@ mod tests {
         let nix = Path::new("/nix/store/abc123-herdr-0.6.6/bin/herdr");
         let direct = Path::new("/home/user/.local/bin/herdr");
 
-        assert!(preview_channel_rejection_for_exe_path(homebrew)
-            .is_some_and(|message| message.contains("Homebrew")));
-        assert!(preview_channel_rejection_for_exe_path(mise)
-            .is_some_and(|message| message.contains("mise")));
-        assert!(preview_channel_rejection_for_exe_path(nix)
-            .is_some_and(|message| message.contains("Nix")));
+        assert!(
+            preview_channel_rejection_for_exe_path(homebrew)
+                .is_some_and(|message| message.contains("Homebrew"))
+        );
+        assert!(
+            preview_channel_rejection_for_exe_path(mise)
+                .is_some_and(|message| message.contains("mise"))
+        );
+        assert!(
+            preview_channel_rejection_for_exe_path(nix)
+                .is_some_and(|message| message.contains("Nix"))
+        );
         assert!(preview_channel_rejection_for_exe_path(direct).is_none());
     }
 
@@ -2805,6 +2860,25 @@ mod tests {
         assert!(running_inside_herdr_env(Some(crate::HERDR_ENV_VALUE)));
         assert!(!running_inside_herdr_env(None));
         assert!(!running_inside_herdr_env(Some("0")));
+    }
+
+    #[test]
+    fn ke_update_runs_the_ke_release_installer() {
+        assert!(KE_DISABLE_SELF_UPDATE);
+        let command = ke_installer_command();
+        let args: Vec<String> = command
+            .get_args()
+            .map(|arg| arg.to_string_lossy().into_owned())
+            .collect();
+        let joined = args.join(" ");
+        assert!(
+            joined.contains("ke-install"),
+            "ke update must invoke the ke installer, got {joined}"
+        );
+        assert!(
+            !joined.contains("herdr.dev"),
+            "ke update must not use the herdr update channel"
+        );
     }
 
     #[test]
@@ -3034,9 +3108,11 @@ mod tests {
             targets[0].socket_path,
             PathBuf::from("/tmp/custom-herdr.sock")
         );
-        assert!(targets[0]
-            .stop_command
-            .contains(crate::api::SOCKET_PATH_ENV_VAR));
+        assert!(
+            targets[0]
+                .stop_command
+                .contains(crate::api::SOCKET_PATH_ENV_VAR)
+        );
     }
 
     #[test]
@@ -3590,9 +3666,11 @@ mod tests {
         );
         let manifest: UpdateManifest = serde_json::from_str(&json).unwrap();
 
-        assert!(release_info_from_manifest(&manifest)
-            .unwrap_err()
-            .contains("missing a SHA-256 checksum"));
+        assert!(
+            release_info_from_manifest(&manifest)
+                .unwrap_err()
+                .contains("missing a SHA-256 checksum")
+        );
     }
 
     #[test]
@@ -3735,11 +3813,13 @@ mod tests {
         let manifest: UpdateManifest = serde_json::from_str(json)
             .expect("distribution/latest.json should match updater schema");
 
-        assert!(!manifest
-            .metadata_for_version(&Version::parse(&manifest.version).unwrap())
-            .expect("metadata")
-            .notes_body()
-            .is_empty());
+        assert!(
+            !manifest
+                .metadata_for_version(&Version::parse(&manifest.version).unwrap())
+                .expect("metadata")
+                .notes_body()
+                .is_empty()
+        );
         // distribution/latest.json describes the latest released binaries, not the
         // current unreleased checkout. Its protocol is updated by the release
         // flow together with the release assets.
@@ -3817,10 +3897,12 @@ mod tests {
                     .get("sha256")
                     .and_then(serde_json::Value::as_object)
                     .unwrap_or_else(|| panic!("missing checksums for release {version}"));
-                assert!(checksums
-                    .get("windows-x86_64")
-                    .and_then(serde_json::Value::as_str)
-                    .is_some_and(|value| value.len() == 64));
+                assert!(
+                    checksums
+                        .get("windows-x86_64")
+                        .and_then(serde_json::Value::as_str)
+                        .is_some_and(|value| value.len() == 64)
+                );
             }
         }
     }

@@ -1500,7 +1500,7 @@
           "key": "ke.model.profiles",
           "type": "table",
           "default": "empty",
-          "description": "ke only: named model profiles `[ke.model.profiles.<name>]` with `provider` (\"openai\" or \"cli\"), `base_url`, `api_key_env` (variable name, never the key), `model`, and `command` (argv for CLI providers)."
+          "description": "ke only: named model profiles `[ke.model.profiles.<name>]` with `provider` (\"openai\" or \"cli\"), `base_url`, `api_key_env` (variable name, never the key), `model` (model or endpoint id), `think` (empty/off/on), `max_tokens` (0 omits), and `command` (argv for CLI providers). Built-in access templates: local (Ollama), ark (Volcengine / Coding Plan), openai."
         },
         {
           "key": "ke.redact.api_keys",
