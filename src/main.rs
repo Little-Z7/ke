@@ -613,6 +613,16 @@ fn main() -> io::Result<()> {
         return client::run_client();
     }
 
+    if args.get(1).map(|s| s.as_str()) == Some("version") {
+        platform::begin_cli_output();
+        println!(
+            "ke {} (based on herdr {})",
+            crate::build_info::KE_VERSION,
+            crate::build_info::version()
+        );
+        return Ok(());
+    }
+
     if args.get(1).map(|s| s.as_str()) == Some("update") {
         let options = match update::parse_self_update_args(&args[2..]) {
             Ok(options) => options,
@@ -653,6 +663,7 @@ fn main() -> io::Result<()> {
         println!("       herdr --remote <ssh-target> [--session <name>]");
         println!("       herdr session attach <name>");
         println!("       herdr completion zsh");
+        println!("       herdr version");
         println!("       herdr update [--handoff]");
         println!("       herdr channel set <stable|preview>");
         println!("       herdr machine <subcommand> ...");
@@ -678,6 +689,7 @@ fn main() -> io::Result<()> {
                 "herdr status [server|client]",
                 "Show local client and running server status",
             ),
+            ("herdr version", "Print the ke version and exit"),
             ("herdr update", "Download and install the latest version"),
             ("herdr completion zsh", "Generate shell completions for zsh"),
             (
@@ -811,6 +823,7 @@ fn main() -> io::Result<()> {
                 "client",
                 "remote-client-bridge",
                 "update",
+                "version",
                 "status",
                 "config",
                 "channel",

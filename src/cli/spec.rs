@@ -30,6 +30,7 @@ pub(super) fn command() -> Command {
                 .help("Print version and exit"),
         )
         .subcommand(completion::command())
+        .subcommand(version_command())
         .subcommand(update_command())
         .subcommand(status_command())
         .subcommand(config_command())
@@ -112,6 +113,10 @@ fn write_requested_help(
     selected.write_long_help(&mut *output)?;
     writeln!(output)?;
     Ok(true)
+}
+
+fn version_command() -> Command {
+    Command::new("version").about("Print the ke version and exit")
 }
 
 fn update_command() -> Command {
