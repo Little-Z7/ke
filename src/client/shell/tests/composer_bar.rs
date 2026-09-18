@@ -503,7 +503,10 @@ fn ke_model_opens_the_form_overlay() {
     let _ = submit(&mut state);
     assert!(matches!(
         state.overlay,
-        Some(ClientShellOverlay::KeModel(_))
+        Some(ClientShellOverlay::Settings(ClientSettingsOverlay {
+            section: ClientSettingsSection::KeModel,
+            ..
+        }))
     ));
 }
 
@@ -513,18 +516,116 @@ fn ke_model_plan_cycle_fills_ark() {
     state.handle_input_bytes(b"/ke model");
     let _ = submit(&mut state);
     let mut out = ClientShellInput::default();
-    assert!(state.handle_ke_model_key(
+    assert!(state.route_settings_key(
         &crate::input::TerminalKey::new(
             crossterm::event::KeyCode::Right,
             crossterm::event::KeyModifiers::NONE
         ),
         &mut out
     ));
-    let Some(ClientShellOverlay::KeModel(form)) = state.overlay.as_ref() else {
-        panic!("model form");
+    let Some(ClientShellOverlay::Settings(settings)) = state.overlay.as_ref() else {
+        panic!("model settings");
     };
-    assert_eq!(form.name.as_str(), "ark");
-    assert!(form.base_url.as_str().contains("ark.cn-beijing"));
-    assert_eq!(form.api_key_env.as_str(), "ARK_API_KEY");
-    assert_eq!(form.plan_label(), "火山方舟 / Coding Plan");
+    assert_eq!(settings.section, ClientSettingsSection::KeModel);
+    assert_eq!(settings.ke_model.name.as_str(), "ark");
+    assert!(settings.ke_model.base_url.as_str().contains("ark.cn-beijing"));
+    assert_eq!(settings.ke_model.api_key_env.as_str(), "ARK_API_KEY");
+    assert_eq!(settings.ke_model.plan_label(), "火山方舟 / Coding Plan");
+}
+
+#[test]
+fn settings_includes_the_model_tab() {
+    let mut state = ClientShellState::new(ClientShellConfig::from_config(&Config::default()));
+    state.set_snapshot(Box::new(snapshot()));
+    state.set_pane_surface(surface());
+    state.open_settings_overlay();
+    let mut out = ClientShellInput::default();
+    state.select_settings_section(ClientSettingsSection::KeModel, &mut out);
+    state.compose(106, 30).expect("settings model tab");
+    assert!(
+        state
+            .hits
+            .settings_tabs
+            .iter()
+            .any(|(_, section)| *section == ClientSettingsSection::KeModel),
+        "settings must expose a model tab"
+    );
+    assert!(
+        state.hits.settings_choices.len() >= 8,
+        "model tab should list the form fields"
+    );
+}
+
+#[test]
+fn dragging_the_composer_divider_changes_the_right_dock_width() {
+    use crossterm::event::{MouseButton, MouseEventKind};
+
+    let path = std::env::temp_dir().join(format!(
+        "ke-composer-width-{}.json",
+        std::process::id()
+    ));
+    let _ = std::fs::remove_file(&path);
+    let config =
+        ClientShellConfig::from_config(&Config::default()).with_preferences_path(path.clone());
+    let mut state = ClientShellState::new(config);
+    state.set_snapshot(Box::new(snapshot()));
+    state.set_pane_surface(surface());
+    state.compose(120, 40).expect("desktop composer");
+    let divider = state.hits.composer_divider;
+    assert!(
+        divider.width == 1 && divider.height > 2,
+        "right dock should expose a 1-col divider, got {divider:?}"
+    );
+    assert_eq!(state.composer_width, COMPOSER_COLS);
+    assert_eq!(state.composer_area(120, 40).expect("dock").width, COMPOSER_COLS);
+
+    state.handle_raw_events(vec![RawInputEvent::Mouse(MouseEvent {
+        kind: MouseEventKind::Down(MouseButton::Left),
+        column: divider.x,
+        row: divider.y + 2,
+        modifiers: crossterm::event::KeyModifiers::empty(),
+    })]);
+    let drag_column = divider.x.saturating_sub(8);
+    let resize = state.handle_raw_events(vec![RawInputEvent::Mouse(MouseEvent {
+        kind: MouseEventKind::Drag(MouseButton::Left),
+        column: drag_column,
+        row: divider.y + 2,
+        modifiers: crossterm::event::KeyModifiers::empty(),
+    })]);
+    assert!(state.composer_width > COMPOSER_COLS);
+    assert!(state.composer_width_manual);
+    assert!(resize.resize);
+    state.handle_raw_events(vec![RawInputEvent::Mouse(MouseEvent {
+        kind: MouseEventKind::Up(MouseButton::Left),
+        column: drag_column,
+        row: divider.y + 2,
+        modifiers: crossterm::event::KeyModifiers::empty(),
+    })]);
+    assert!(state.chrome_drag.is_none());
+    let saved = state.composer_width;
+
+    let reloaded = ClientShellState::new(
+        ClientShellConfig::from_config(&Config::default()).with_preferences_path(path.clone()),
+    );
+    assert_eq!(reloaded.composer_width, saved);
+    assert!(reloaded.composer_width_manual);
+
+    state.set_pane_surface(surface());
+    state.compose(120, 40).expect("resized composer");
+    let reset_divider = state.hits.composer_divider;
+    state.handle_raw_events(vec![RawInputEvent::Mouse(MouseEvent {
+        kind: MouseEventKind::Down(MouseButton::Left),
+        column: reset_divider.x,
+        row: reset_divider.y + 2,
+        modifiers: crossterm::event::KeyModifiers::empty(),
+    })]);
+    state.handle_raw_events(vec![RawInputEvent::Mouse(MouseEvent {
+        kind: MouseEventKind::Down(MouseButton::Left),
+        column: reset_divider.x,
+        row: reset_divider.y + 2,
+        modifiers: crossterm::event::KeyModifiers::empty(),
+    })]);
+    assert_eq!(state.composer_width, COMPOSER_COLS);
+    assert!(!state.composer_width_manual);
+    let _ = std::fs::remove_file(path);
 }

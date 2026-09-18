@@ -7,6 +7,8 @@ use crate::ke::slash::{self, PLAN_TEMPLATES, PlanTemplate};
 pub(super) const THINK_MODES: [&str; 3] = ["", "off", "on"];
 pub(super) const THINK_LABELS: [&str; 3] = ["自动", "关", "开"];
 const CUSTOM_PLAN: usize = 0;
+/// Fields shown in Settings (save is the shared ↵ apply button).
+const FORM_FIELDS: usize = 8;
 const FIELD_COUNT: usize = 9;
 
 #[derive(Debug)]
@@ -20,6 +22,12 @@ pub(super) struct ClientKeModelOverlay {
     pub(super) api_key_env: TextEditor,
     pub(super) think: usize,
     pub(super) max_tokens: TextEditor,
+}
+
+impl Default for ClientKeModelOverlay {
+    fn default() -> Self {
+        Self::from_config(&crate::config::KeConfig::default())
+    }
 }
 
 impl ClientKeModelOverlay {
@@ -133,10 +141,33 @@ fn match_plan(name: &str, profile: &KeModelProfile) -> usize {
 
 impl ClientShellState {
     pub(super) fn open_ke_model_form(&mut self, outcome: &mut ClientShellInput) {
-        self.overlay = Some(ClientShellOverlay::KeModel(
-            ClientKeModelOverlay::from_config(&self.config.ke),
-        ));
+        self.open_settings_overlay();
+        self.select_settings_section(ClientSettingsSection::KeModel, outcome);
         outcome.repaint = true;
+    }
+
+    pub(super) fn ke_model_form(&self) -> Option<&ClientKeModelOverlay> {
+        match self.overlay.as_ref() {
+            Some(ClientShellOverlay::KeModel(form)) => Some(form),
+            Some(ClientShellOverlay::Settings(settings))
+                if settings.section == ClientSettingsSection::KeModel =>
+            {
+                Some(&settings.ke_model)
+            }
+            _ => None,
+        }
+    }
+
+    pub(super) fn ke_model_form_mut(&mut self) -> Option<&mut ClientKeModelOverlay> {
+        match self.overlay.as_mut() {
+            Some(ClientShellOverlay::KeModel(form)) => Some(form),
+            Some(ClientShellOverlay::Settings(settings))
+                if settings.section == ClientSettingsSection::KeModel =>
+            {
+                Some(&mut settings.ke_model)
+            }
+            _ => None,
+        }
     }
 
     pub(super) fn handle_ke_model_key(
@@ -144,9 +175,9 @@ impl ClientShellState {
         key: &crate::input::TerminalKey,
         outcome: &mut ClientShellInput,
     ) -> bool {
-        let Some(ClientShellOverlay::KeModel(_)) = self.overlay.as_ref() else {
+        if self.ke_model_form().is_none() {
             return false;
-        };
+        }
         if key.kind == crossterm::event::KeyEventKind::Release {
             return true;
         }
@@ -204,7 +235,7 @@ impl ClientShellState {
             }
             _ => {}
         }
-        if let Some(ClientShellOverlay::KeModel(form)) = self.overlay.as_mut() {
+        if let Some(form) = self.ke_model_form_mut() {
             if let Some(editor) = form.active_editor() {
                 if editor.handle_key(key).is_some() {
                     outcome.repaint = true;
@@ -215,25 +246,29 @@ impl ClientShellState {
     }
 
     fn ke_model_field(&self) -> usize {
-        match &self.overlay {
-            Some(ClientShellOverlay::KeModel(form)) => form.field,
-            _ => 0,
-        }
+        self.ke_model_form().map(|form| form.field).unwrap_or(0)
     }
 
-    fn ke_model_is_toggle(&self) -> bool {
+    pub(super) fn ke_model_is_toggle(&self) -> bool {
         matches!(self.ke_model_field(), 0 | 1 | 6)
     }
 
-    fn ke_model_nudge_field(&mut self, delta: isize) {
-        if let Some(ClientShellOverlay::KeModel(form)) = self.overlay.as_mut() {
-            let count = FIELD_COUNT as isize;
+    pub(super) fn ke_model_nudge_field(&mut self, delta: isize) {
+        let count = if matches!(self.overlay, Some(ClientShellOverlay::Settings(_))) {
+            FORM_FIELDS as isize
+        } else {
+            FIELD_COUNT as isize
+        };
+        if let Some(form) = self.ke_model_form_mut() {
             form.field = (form.field as isize + delta).rem_euclid(count) as usize;
+        }
+        if let Some(ClientShellOverlay::Settings(settings)) = self.overlay.as_mut() {
+            settings.selected = settings.ke_model.field;
         }
     }
 
-    fn ke_model_toggle(&mut self, delta: isize) {
-        if let Some(ClientShellOverlay::KeModel(form)) = self.overlay.as_mut() {
+    pub(super) fn ke_model_toggle(&mut self, delta: isize) {
+        if let Some(form) = self.ke_model_form_mut() {
             match form.field {
                 0 => form.enabled = !form.enabled,
                 1 => form.cycle_plan(delta),
@@ -243,8 +278,8 @@ impl ClientShellState {
         }
     }
 
-    fn save_ke_model_form(&mut self, outcome: &mut ClientShellInput) {
-        let Some(ClientShellOverlay::KeModel(form)) = self.overlay.as_ref() else {
+    pub(super) fn save_ke_model_form(&mut self, outcome: &mut ClientShellInput) {
+        let Some(form) = self.ke_model_form() else {
             return;
         };
         let enabled = form.enabled;

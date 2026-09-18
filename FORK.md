@@ -117,6 +117,9 @@ git tag ke-v<KE_VERSION> && git push origin ke/main ke-v<KE_VERSION>
 | 2026-09-18 | src/update.rs、src/main.rs、src/build_info.rs | 终端 `ke update` 跑 ke 官方安装脚本；不再只打印命令；仍禁用 herdr.dev 自更新 |
 | 2026-09-18 | src/client/shell/state.rs、composer.rs | 桌面壳栏改到窗格右侧；窄屏仍用底栏 |
 | 2026-09-18 | src/build_info.rs、src/main.rs、src/cli/spec.rs | 发布 ke-v0.3.1：`ke version` 等同 `--version`；安装包含右侧栏与会真正执行安装脚本的 `ke update` |
+| 2026-09-18 | src/client/shell/composer.rs、mouse.rs、preferences.rs | 右侧壳栏可拖左侧 `│` 改宽，双击恢复 32 列，宽度写入 client-shell 偏好 |
+| 2026-09-18 | src/client/shell/settings.rs、ke_model.rs、global_menu.rs | 模型配置并入 Settings 的 model 分页；`/ke model` 与全局菜单 model 打开同一套表单 |
+| 2026-09-18 | src/build_info.rs | 发布 ke-v0.3.2：Settings 模型页与可拖宽壳栏 |
 
 ## 同步上游
 

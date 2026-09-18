@@ -42,6 +42,7 @@ impl ClientShellState {
             integration_messages: Vec::new(),
             loading_integrations: false,
             installing_integrations: false,
+            ke_model: super::ke_model::ClientKeModelOverlay::from_config(&self.config.ke),
         }));
     }
 
@@ -52,6 +53,14 @@ impl ClientShellState {
             ClientSettingsSection::Sound => usize::from(!self.config.sound_enabled),
             ClientSettingsSection::Toast => toast_index(self.config.toast_delivery),
             ClientSettingsSection::Integrations => 0,
+            ClientSettingsSection::KeModel => self
+                .overlay
+                .as_ref()
+                .and_then(|overlay| match overlay {
+                    ClientShellOverlay::Settings(settings) => Some(settings.ke_model.field),
+                    _ => None,
+                })
+                .unwrap_or(1),
         }
     }
 
@@ -100,6 +109,7 @@ impl ClientShellState {
                 ClientSettingsSection::Indicators | ClientSettingsSection::Sound => 2,
                 ClientSettingsSection::Toast => 4,
                 ClientSettingsSection::Integrations => settings.integrations.len(),
+                ClientSettingsSection::KeModel => 8,
             },
             _ => 0,
         }
@@ -116,6 +126,9 @@ impl ClientShellState {
         }
         settings.selected = (settings.selected as isize + delta)
             .clamp(0, count.saturating_sub(1) as isize) as usize;
+        if settings.section == ClientSettingsSection::KeModel {
+            settings.ke_model.field = settings.selected;
+        }
         if settings.section == ClientSettingsSection::Theme {
             self.preview_selected_theme();
         }
@@ -126,6 +139,9 @@ impl ClientShellState {
         if let Some(ClientShellOverlay::Settings(settings)) = self.overlay.as_mut() {
             if count > 0 {
                 settings.selected = index.min(count - 1);
+                if settings.section == ClientSettingsSection::KeModel {
+                    settings.ke_model.field = settings.selected;
+                }
             }
         }
         if matches!(
@@ -223,6 +239,7 @@ impl ClientShellState {
                 );
             }
             ClientSettingsSection::Integrations => self.install_recommended_integrations(outcome),
+            ClientSettingsSection::KeModel => self.save_ke_model_form(outcome),
         }
     }
 
@@ -355,6 +372,15 @@ impl ClientShellState {
         if !matches!(self.overlay, Some(ClientShellOverlay::Settings(_))) {
             return false;
         }
+        if matches!(
+            self.overlay,
+            Some(ClientShellOverlay::Settings(ClientSettingsOverlay {
+                section: ClientSettingsSection::KeModel,
+                ..
+            }))
+        ) {
+            return self.route_settings_model_key(key, outcome);
+        }
         let (code, modifiers) = crate::config::normalize_key_combo((key.code, key.modifiers));
         if code == KeyCode::Esc {
             if !matches!(
@@ -394,6 +420,65 @@ impl ClientShellState {
         if matches!(code, KeyCode::Enter | KeyCode::Char(' ')) && modifiers.is_empty() {
             self.apply_settings_choice(outcome);
             return true;
+        }
+        true
+    }
+
+    fn route_settings_model_key(
+        &mut self,
+        key: &crate::input::TerminalKey,
+        outcome: &mut ClientShellInput,
+    ) -> bool {
+        if key.kind == crossterm::event::KeyEventKind::Release {
+            return true;
+        }
+        let (code, modifiers) = crate::config::normalize_key_combo((key.code, key.modifiers));
+        let shift = modifiers.contains(KeyModifiers::SHIFT);
+        let plain = modifiers.difference(KeyModifiers::SHIFT).is_empty();
+        match code {
+            KeyCode::Esc => {
+                self.cancel_settings_overlay();
+                outcome.repaint = true;
+                return true;
+            }
+            KeyCode::Tab if !shift => {
+                self.move_settings_section(1, outcome);
+                return true;
+            }
+            KeyCode::BackTab => {
+                self.move_settings_section(-1, outcome);
+                return true;
+            }
+            KeyCode::Up => {
+                self.ke_model_nudge_field(-1);
+                outcome.repaint = true;
+                return true;
+            }
+            KeyCode::Down => {
+                self.ke_model_nudge_field(1);
+                outcome.repaint = true;
+                return true;
+            }
+            KeyCode::Enter if plain => {
+                self.save_ke_model_form(outcome);
+                return true;
+            }
+            KeyCode::Left | KeyCode::Right | KeyCode::Char(' ')
+                if plain && self.ke_model_is_toggle() =>
+            {
+                let delta = if matches!(code, KeyCode::Left) { -1 } else { 1 };
+                self.ke_model_toggle(delta);
+                outcome.repaint = true;
+                return true;
+            }
+            _ => {}
+        }
+        if let Some(form) = self.ke_model_form_mut() {
+            if let Some(editor) = form.active_editor() {
+                if editor.handle_key(key).is_some() {
+                    outcome.repaint = true;
+                }
+            }
         }
         true
     }

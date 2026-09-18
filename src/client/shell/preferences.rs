@@ -19,6 +19,8 @@ pub(super) struct ClientChromePreferences {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub(super) sidebar_width: Option<u16>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(super) composer_width: Option<u16>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub(super) sidebar_section_split: Option<f32>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub(super) sidebar_collapsed: Option<bool>,
@@ -116,9 +118,11 @@ mod tests {
         for writer in writers {
             writer.join().expect("preference writer").expect("store");
         }
-        assert!(load(&path)
-            .and_then(|saved| saved.sidebar_width)
-            .is_some_and(|width| (20..28).contains(&width)));
+        assert!(
+            load(&path)
+                .and_then(|saved| saved.sidebar_width)
+                .is_some_and(|width| (20..28).contains(&width))
+        );
         std::fs::remove_file(path).expect("remove preferences");
     }
 

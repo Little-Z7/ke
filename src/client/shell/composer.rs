@@ -13,8 +13,9 @@ use unicode_segmentation::UnicodeSegmentation;
 use unicode_width::UnicodeWidthStr;
 
 pub(super) const COMPOSER_ROWS: u16 = 2;
-/// Desktop dock width. Narrow terminals keep the bottom bar instead.
+/// Default desktop dock width. Drag the left `│` to change it; double-click resets.
 pub(super) const COMPOSER_COLS: u16 = 32;
+pub(super) const COMPOSER_MIN_COLS: u16 = 16;
 pub(super) const COMPOSER_MIN_PANE_COLS: u16 = 24;
 /// Extra rows for an expanded `@ke` transcript sitting above the input.
 pub(super) const CHAT_ROWS: u16 = 8;
@@ -146,6 +147,19 @@ impl ClientShellState {
             && self.popup_terminal_id.is_none()
             && !self.popup_pending
             && self.focused_pane_id().is_some()
+    }
+
+    pub(super) fn composer_width_bounds(&self, pane_width: u16) -> (u16, u16) {
+        let max = pane_width.saturating_sub(COMPOSER_MIN_PANE_COLS);
+        (COMPOSER_MIN_COLS.min(max), max)
+    }
+
+    pub(super) fn composer_reserved_cols(&self, pane_width: u16) -> u16 {
+        let (min, max) = self.composer_width_bounds(pane_width);
+        if max < COMPOSER_MIN_COLS {
+            return 0;
+        }
+        self.composer_width.clamp(min, max)
     }
 
     pub(super) fn composer_dock_on_right(&self, cols: u16, rows: u16) -> bool {
@@ -589,6 +603,27 @@ impl ClientShellState {
         let point = (mouse.column, mouse.row);
         match mouse.kind {
             MouseEventKind::Down(MouseButton::Left)
+                if super::contains(self.hits.composer_divider, point) =>
+            {
+                let now = std::time::Instant::now();
+                let double_click = self.last_composer_divider_click.is_some_and(|last| {
+                    now.duration_since(last) <= std::time::Duration::from_millis(350)
+                });
+                self.last_composer_divider_click = Some(now);
+                if double_click {
+                    self.composer_width = COMPOSER_COLS;
+                    self.composer_width_manual = false;
+                    self.invalidate_pane_surface();
+                    outcome.repaint = true;
+                    outcome.resize = true;
+                    self.persist_chrome_preferences(outcome);
+                } else {
+                    self.chrome_drag = Some(ClientChromeDrag::ComposerWidth);
+                    self.set_composer_width_from_column(mouse.column, outcome);
+                }
+                true
+            }
+            MouseEventKind::Down(MouseButton::Left)
                 if super::contains(self.hits.composer_toggle, point) =>
             {
                 self.toggle_composer_chat(outcome);
@@ -659,7 +694,7 @@ pub(super) fn render_composer(
         return rendered;
     }
     buffer.set_style(area, Style::default().bg(palette.panel_bg));
-    if area.height > COMPOSER_ROWS.saturating_add(2) {
+    if area.height > COMPOSER_ROWS {
         for y in area.y..area.bottom() {
             if let Some(cell) = buffer.cell_mut((area.x, y)) {
                 cell.set_symbol("│");

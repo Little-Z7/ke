@@ -50,6 +50,7 @@ impl ClientShellState {
         remote_collapsed_groups.sort_by(|left, right| left.profile_id.cmp(&right.profile_id));
         let preferences = preferences::ClientChromePreferences {
             sidebar_width: self.sidebar_width_manual.then_some(self.sidebar_width),
+            composer_width: self.composer_width_manual.then_some(self.composer_width),
             sidebar_section_split: self
                 .sidebar_section_split_manual
                 .then_some(self.sidebar_section_split),

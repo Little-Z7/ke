@@ -145,6 +145,8 @@ pub(super) struct ShellHitMap {
     pub(super) composer_input: Rect,
     pub(super) composer_toggle: Rect,
     pub(super) composer_chat: Rect,
+    /// Left edge of the desktop composer dock; drag to resize.
+    pub(super) composer_divider: Rect,
 }
 
 #[derive(Clone)]
@@ -196,6 +198,7 @@ pub(super) struct ClientTabPress {
 pub(super) enum ClientChromeDrag {
     SidebarWidth,
     SidebarSection,
+    ComposerWidth,
     WorkspaceScrollbar {
         grab_row_offset: u16,
     },
@@ -397,6 +400,7 @@ pub(super) enum ClientSettingsSection {
     Sound,
     Toast,
     Integrations,
+    KeModel,
 }
 
 impl ClientSettingsSection {
@@ -406,6 +410,7 @@ impl ClientSettingsSection {
         Self::Sound,
         Self::Toast,
         Self::Integrations,
+        Self::KeModel,
     ];
 
     pub(super) fn label(self) -> &'static str {
@@ -415,6 +420,7 @@ impl ClientSettingsSection {
             Self::Sound => "sound",
             Self::Toast => "toasts",
             Self::Integrations => "integrations",
+            Self::KeModel => "model",
         }
     }
 }
@@ -429,6 +435,8 @@ pub(super) struct ClientSettingsOverlay {
     pub(super) integration_messages: Vec<String>,
     pub(super) loading_integrations: bool,
     pub(super) installing_integrations: bool,
+    /// Modified by ke: `[ke.model]` form shown on the settings "model" tab.
+    pub(super) ke_model: super::ke_model::ClientKeModelOverlay,
 }
 
 #[derive(Debug)]
@@ -595,6 +603,7 @@ pub(super) enum ClientShellOverlay {
     Settings(ClientSettingsOverlay),
     #[allow(dead_code)] // still rendered if opened; default view is the composer dock
     KeChat(super::ke_chat::ClientKeChatOverlay), // Modified by ke
+    #[allow(dead_code)] // still rendered in overlay tests; the live path is Settings → model
     KeModel(super::ke_model::ClientKeModelOverlay), // Modified by ke
 }
 
@@ -870,7 +879,11 @@ pub(crate) struct ClientShellState {
     pub(super) sidebar_section_split_manual: bool,
     pub(super) agent_panel_sort_manual: bool,
     pub(super) last_sidebar_divider_click: Option<std::time::Instant>,
+    pub(super) last_composer_divider_click: Option<std::time::Instant>,
     pub(super) chrome_drag: Option<ClientChromeDrag>,
+    // Modified by ke: desktop composer dock width (drag the left `│`).
+    pub(super) composer_width: u16,
+    pub(super) composer_width_manual: bool,
     pub(super) workspace_press: Option<ClientWorkspacePress>,
     pub(super) tab_press: Option<ClientTabPress>,
     pub(super) collapsed_groups: HashSet<String>,
@@ -1040,6 +1053,12 @@ impl ClientShellState {
             sidebar_section_split_manual: preferences.sidebar_section_split.is_some(),
             agent_panel_sort_manual: preferences.agent_panel_sort.is_some(),
             last_sidebar_divider_click: None,
+            last_composer_divider_click: None,
+            composer_width: preferences
+                .composer_width
+                .unwrap_or(super::composer::COMPOSER_COLS)
+                .clamp(super::composer::COMPOSER_MIN_COLS, 96),
+            composer_width_manual: preferences.composer_width.is_some(),
             chrome_drag: None,
             workspace_press: None,
             tab_press: None,
@@ -1224,8 +1243,10 @@ impl ClientShellState {
             return layout;
         }
         if self.composer_dock_on_right(cols, rows) {
-            let reserved = super::composer::COMPOSER_COLS;
-            if layout.pane_surface.width > reserved + super::composer::COMPOSER_MIN_PANE_COLS {
+            let reserved = self.composer_reserved_cols(layout.pane_surface.width);
+            if reserved > 0
+                && layout.pane_surface.width > reserved + super::composer::COMPOSER_MIN_PANE_COLS
+            {
                 layout.pane_surface.width = layout.pane_surface.width.saturating_sub(reserved);
             }
         } else {

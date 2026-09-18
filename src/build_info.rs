@@ -4,7 +4,7 @@ pub const BASE_VERSION: &str = env!("CARGO_PKG_VERSION");
 
 // Modified by ke: ke's own release version. BASE_VERSION stays the upstream herdr version ke is
 // based on. Release tags are `ke-v<KE_VERSION>`; the ke release workflow checks they match.
-pub const KE_VERSION: &str = "0.3.1";
+pub const KE_VERSION: &str = "0.3.2";
 // Modified by ke: where ke releases and the installer live.
 #[cfg(windows)]
 pub const KE_INSTALL_SCRIPT_URL: &str =

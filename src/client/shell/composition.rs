@@ -325,6 +325,11 @@ impl ClientShellState {
                 self.hits.composer_toggle = rendered.toggle;
                 self.hits.composer_chat = rendered.chat;
                 self.hits.ke_chat_max_scroll = rendered.max_scroll;
+                self.hits.composer_divider = if self.composer_dock_on_right(cols, rows) {
+                    Rect::new(area.x, area.y, 1, area.height)
+                } else {
+                    Rect::default()
+                };
                 rendered.cursor
             }
             _ => None,

@@ -5,6 +5,33 @@ const SELECTION_AUTOSCROLL_INTERVAL: std::time::Duration = std::time::Duration::
 const SELECTION_REPAINT_INTERVAL: std::time::Duration = std::time::Duration::from_millis(16);
 
 impl ClientShellState {
+    pub(super) fn set_composer_width_from_column(
+        &mut self,
+        column: u16,
+        outcome: &mut ClientShellInput,
+    ) {
+        let Some((cols, rows)) = self.last_composed_size else {
+            return;
+        };
+        if !self.composer_dock_on_right(cols, rows) {
+            return;
+        }
+        let pane_width = self.base_layout(cols, rows).pane_surface.width;
+        let (min, max) = self.composer_width_bounds(pane_width);
+        if max < min {
+            return;
+        }
+        let dock_right = self.base_layout(cols, rows).pane_surface.right();
+        let width = dock_right.saturating_sub(column).clamp(min, max);
+        if self.composer_width != width {
+            self.composer_width = width;
+            self.composer_width_manual = true;
+            self.invalidate_pane_surface();
+            outcome.repaint = true;
+            outcome.resize = true;
+        }
+    }
+
     fn set_sidebar_width_from_column(&mut self, column: u16, outcome: &mut ClientShellInput) {
         let (min, max) = crate::config::validated_sidebar_bounds(
             self.config.sidebar_min_width,
@@ -1018,6 +1045,10 @@ impl ClientShellState {
                     self.set_sidebar_width_from_column(mouse.column, outcome);
                     return;
                 }
+                Some(ClientChromeDrag::ComposerWidth) => {
+                    self.set_composer_width_from_column(mouse.column, outcome);
+                    return;
+                }
                 Some(ClientChromeDrag::SidebarSection) => {
                     self.set_sidebar_section_from_row(mouse.row, outcome);
                     return;
@@ -1333,7 +1364,9 @@ impl ClientShellState {
                             );
                         }
                     }
-                    ClientChromeDrag::SidebarWidth | ClientChromeDrag::SidebarSection => {
+                    ClientChromeDrag::SidebarWidth
+                    | ClientChromeDrag::SidebarSection
+                    | ClientChromeDrag::ComposerWidth => {
                         self.persist_chrome_preferences(outcome);
                     }
                     ClientChromeDrag::WorkspaceScrollbar { .. }
@@ -1512,6 +1545,16 @@ impl ClientShellState {
                     .copied()
                 {
                     self.select_settings_choice(index);
+                    if matches!(
+                        self.overlay,
+                        Some(ClientShellOverlay::Settings(ClientSettingsOverlay {
+                            section: ClientSettingsSection::KeModel,
+                            ..
+                        }))
+                    ) && self.ke_model_is_toggle()
+                    {
+                        self.ke_model_toggle(1);
+                    }
                     let immediate = matches!(
                         self.overlay,
                         Some(ClientShellOverlay::Settings(ClientSettingsOverlay {

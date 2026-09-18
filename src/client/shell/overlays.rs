@@ -1331,53 +1331,53 @@ fn render_confirm_close_overlay(
     })
 }
 
-// Modified by ke: `[ke.model]` form — endpoint, model/endpoint id, thinking, context.
-fn render_ke_model_overlay(
+// Modified by ke: `[ke.model]` form fields shared by Settings and the standalone overlay.
+pub(super) fn render_ke_model_fields(
     b: &mut Buffer,
+    area: Rect,
     form: &super::ke_model::ClientKeModelOverlay,
     p: &Palette,
-) -> Option<OverlayRender> {
-    let q = popup(b.area, 64, 18)?;
-    let i = panel(b, q, p.accent, p.panel_bg)?;
-    let title = Style::default()
-        .fg(p.text)
-        .bg(p.panel_bg)
-        .add_modifier(Modifier::BOLD);
+) -> (Vec<(Rect, usize)>, Option<crate::protocol::CursorState>) {
     let label = Style::default().fg(p.subtext0).bg(p.panel_bg);
     let field = Style::default().fg(p.text).bg(p.surface0);
     let active = Style::default()
         .fg(p.text)
         .bg(p.surface0)
         .add_modifier(Modifier::BOLD);
-    put_text(b, i.x, i.y, i.width, " 壳模型", title);
     let rows = [
         (
             0usize,
-            "启用管家",
-            if form.enabled { "开" } else { "关" }.to_string(),
+            "enable resident",
+            if form.enabled { "on" } else { "off" }.to_string(),
         ),
-        (1, "接入模板", form.plan_label().to_string()),
-        (2, "预设名", form.name.as_str().to_string()),
-        (3, "接口 / 端点", form.base_url.as_str().to_string()),
-        (4, "模型 / 端点 ID", form.model.as_str().to_string()),
-        (5, "密钥环境变量", form.api_key_env.as_str().to_string()),
+        (1, "access template", form.plan_label().to_string()),
+        (2, "profile name", form.name.as_str().to_string()),
+        (3, "endpoint url", form.base_url.as_str().to_string()),
+        (4, "model / endpoint id", form.model.as_str().to_string()),
+        (5, "api key env", form.api_key_env.as_str().to_string()),
         (
             6,
-            "思考强度",
+            "thinking",
             super::ke_model::THINK_LABELS
                 .get(form.think)
                 .copied()
                 .unwrap_or("自动")
                 .to_string(),
         ),
-        (7, "上下文 max_tokens", form.max_tokens.as_str().to_string()),
+        (7, "max tokens", form.max_tokens.as_str().to_string()),
     ];
     let mut cursor = None;
+    let mut hits = Vec::new();
     for (offset, (index, name, value)) in rows.iter().enumerate() {
-        let y = i.y + 1 + offset as u16;
+        let y = area.y + offset as u16;
+        if y >= area.bottom() {
+            break;
+        }
+        let row = Rect::new(area.x, y, area.width, 1);
+        hits.push((row, *index));
         let selected = form.field == *index;
-        put_text(b, i.x, y, 18, &format!(" {name}"), label);
-        let box_rect = Rect::new(i.x + 18, y, i.width.saturating_sub(18), 1);
+        put_text(b, area.x, y, 22, &format!(" {name}"), label);
+        let box_rect = Rect::new(area.x + 22, y, area.width.saturating_sub(22), 1);
         b.set_style(box_rect, if selected { active } else { field });
         if matches!(index, 2 | 3 | 4 | 5 | 7) && selected {
             let editor = match index {
@@ -1396,10 +1396,29 @@ fn render_ke_model_overlay(
                 y,
                 box_rect.width.saturating_sub(1),
                 value,
-                field,
+                if selected { active } else { field },
             );
         }
     }
+    (hits, cursor)
+}
+
+fn render_ke_model_overlay(
+    b: &mut Buffer,
+    form: &super::ke_model::ClientKeModelOverlay,
+    p: &Palette,
+) -> Option<OverlayRender> {
+    let q = popup(b.area, 64, 18)?;
+    let i = panel(b, q, p.accent, p.panel_bg)?;
+    let title = Style::default()
+        .fg(p.text)
+        .bg(p.panel_bg)
+        .add_modifier(Modifier::BOLD);
+    let label = Style::default().fg(p.subtext0).bg(p.panel_bg);
+    put_text(b, i.x, i.y, i.width, " 壳模型", title);
+    let fields = Rect::new(i.x, i.y + 1, i.width, 8);
+    let (hits, cursor) = render_ke_model_fields(b, fields, form, p);
+    let _ = hits;
     let save_y = i.y + 11;
     let save = Rect::new(i.x + 1, save_y, 12, 1);
     let cancel = Rect::new(i.x + 15, save_y, 14, 1);

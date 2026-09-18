@@ -275,6 +275,7 @@ fn every_dialog_and_menu_occludes_its_panel_not_the_whole_screen() {
             integration_messages: Vec::new(),
             loading_integrations: false,
             installing_integrations: false,
+            ke_model: super::super::ke_model::ClientKeModelOverlay::default(),
         }),
         ClientShellOverlay::KeChat(super::super::ke_chat::ClientKeChatOverlay {
             title: "管家".into(),

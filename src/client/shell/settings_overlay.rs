@@ -44,6 +44,8 @@ pub(super) fn render_settings_overlay(
         .saturating_add(settings.integration_messages.len().min(6) as u16);
     let height = if settings.section == ClientSettingsSection::Integrations {
         integration_height.max(22)
+    } else if settings.section == ClientSettingsSection::KeModel {
+        24
     } else {
         22
     };
@@ -127,6 +129,7 @@ pub(super) fn render_settings_overlay(
         inner.height.saturating_sub(7),
     );
     let mut choice_hits = Vec::new();
+    let mut cursor = None;
     match settings.section {
         ClientSettingsSection::Theme => {
             let visible = usize::from(content.height);
@@ -197,6 +200,36 @@ pub(super) fn render_settings_overlay(
         ClientSettingsSection::Integrations => {
             render_integrations(buffer, content, settings, palette);
         }
+        ClientSettingsSection::KeModel => {
+            put_text(
+                buffer,
+                content.x,
+                content.y,
+                content.width,
+                "resident model",
+                Style::default()
+                    .fg(palette.text)
+                    .bg(palette.panel_bg)
+                    .add_modifier(Modifier::BOLD),
+            );
+            put_text(
+                buffer,
+                content.x,
+                content.y + 1,
+                content.width,
+                "openai-compatible endpoint for @ke  ·  key is an env var name, not the secret",
+                Style::default().fg(palette.overlay1).bg(palette.panel_bg),
+            );
+            let fields = Rect::new(
+                content.x,
+                content.y + 3,
+                content.width,
+                content.height.saturating_sub(3),
+            );
+            let rendered = super::render_ke_model_fields(buffer, fields, &settings.ke_model, palette);
+            choice_hits = rendered.0;
+            cursor = rendered.1;
+        }
     }
 
     let installable = settings
@@ -239,7 +272,11 @@ pub(super) fn render_settings_overlay(
         inner.x,
         inner.bottom().saturating_sub(2),
         inner.width,
-        " ↑↓ select  tab section",
+        if settings.section == ClientSettingsSection::KeModel {
+            " ↑↓ field  ←→ cycle  tab section"
+        } else {
+            " ↑↓ select  tab section"
+        },
         Style::default().fg(palette.overlay1).bg(palette.panel_bg),
     );
 
@@ -250,6 +287,7 @@ pub(super) fn render_settings_overlay(
         settings_popup: popup,
         settings_tabs: tab_hits,
         settings_choices: choice_hits,
+        cursor,
         ..OverlayRender::default()
     })
 }

@@ -4,6 +4,7 @@ use super::*;
 pub(super) enum ClientGlobalMenuAction {
     Binding(crate::input::KeybindAction),
     WhatsNew,
+    KeModel,
 }
 
 pub(super) fn global_menu_attention(snapshot: &ClientShellSnapshot) -> bool {
@@ -27,6 +28,7 @@ pub(super) fn global_menu_items(
             "settings",
             ClientGlobalMenuAction::Binding(crate::input::KeybindAction::Settings),
         ),
+        ("model", ClientGlobalMenuAction::KeModel),
         (
             "keybinds",
             ClientGlobalMenuAction::Binding(crate::input::KeybindAction::Help),
@@ -104,6 +106,7 @@ impl ClientShellState {
                 self.record_binding(crate::input::KeybindMatch::Action(binding), outcome)
             }
             ClientGlobalMenuAction::WhatsNew => self.open_release_notes(),
+            ClientGlobalMenuAction::KeModel => self.open_ke_model_form(outcome),
         }
         outcome.repaint = true;
     }

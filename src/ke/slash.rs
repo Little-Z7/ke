@@ -4,7 +4,7 @@ use crate::config::{KeConfig, KeModelProfile, upsert_section_bool, upsert_sectio
 
 pub(crate) const HELP: &str = "\
 /ke help
-/ke model            打开模型配置
+/ke model            打开设置里的模型页
 /ke model [预设名|模板|模型id]
 /ke provider <名> openai <base_url> <KEY_ENV>
 /ke prompt

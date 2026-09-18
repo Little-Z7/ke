@@ -41,7 +41,7 @@ Unix 上从源码安装请在仓库内运行 `scripts/ke-install.sh`（需要 Ru
 
 ## 输入栏
 
-按 `prefix+i`（可通过 `keys.toggle_composer` 修改）聚焦右侧的壳栏。桌面下壳占窗格右边一列（约 32 列），对话在上、输入在下；窄屏（≤64 列）仍用窗格下方的两行底栏。聚焦期间，键入和粘贴的文字进入壳栏而不是焦点窗格。
+按 `prefix+i`（可通过 `keys.toggle_composer` 修改）聚焦右侧的壳栏。桌面下壳占窗格右边一列（默认 32 列），对话在上、输入在下；拖左侧的 `│` 改宽度，双击恢复默认。窄屏（≤64 列）仍用窗格下方的两行底栏。聚焦期间，键入和粘贴的文字进入壳栏而不是焦点窗格。
 
 - **Enter** 把文字交给处理进程，再把回复提交到焦点窗格：智能体窗格用 `agent.prompt`，普通终端用 `pane.send_input` 并附带 Enter。
 - **Esc** 或 **Ctrl+U** 清空输入栏；**Backspace** 删除。
@@ -49,7 +49,7 @@ Unix 上从源码安装请在仓库内运行 `scripts/ke-install.sh`（需要 Ru
 - 状态行显示目标窗格和处理进程最近一次的说明。提交仍在处理时新键入的文字会保留。
 - 长文本在输入栏里自动折行，最多 6 行，不会从左侧消失。
 - 输入 `//` 或 `/ke` 时，底栏上方弹出快捷指令列表：↑↓ 选择，Tab 补全。单独的 `/ke` 回车仍是帮助，不会误补成 `/ke model`。
-- `/ke model` 打开模型配置弹层：←→ 切换接入模板（Ollama 本地、火山方舟 / Coding Plan、OpenAI），再改预设名、接口/端点、模型/端点 ID、密钥环境变量、思考强度、上下文 `max_tokens`。方舟可把模型改成 `ep-` 接入点 ID。这不是套餐购买，只是填好 OpenAI 兼容接口。
+- 模型配置在 **Settings → model**：`prefix+s`（或侧栏菜单 » → settings / model），或在壳栏输入 `/ke model`。这是和主题、声音同一套设置弹层：↑↓ 换字段，←→ 切换接入模板（Ollama 本地、火山方舟 / Coding Plan、OpenAI）或开关/思考强度，Tab 切到其它设置页，↵ apply 保存。密钥只填环境变量名（如 `ARK_API_KEY`），先在 shell 里 `export`。方舟可把模型改成 `ep-` 接入点 ID。写进 `~/.config/ke/config.toml` 的 `[ke.model]`。这不是套餐购买，只是填好 OpenAI 兼容接口。
 - `/ke update` 显示当前版本和安装命令。真正更新请在终端跑 `ke update`（会执行官方安装脚本，不走 herdr 通道）。
 
 输入栏从不自行发送。点击面板行（见下）只是填入文字，仍需你按 Enter。
