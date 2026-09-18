@@ -39,6 +39,10 @@ jobs:
             os: macos-latest
             name: ke-macos-aarch64
             smoke: true
+          - target: x86_64-pc-windows-msvc
+            os: windows-2022
+            name: ke-windows-x86_64.zip
+            smoke: true
 
     runs-on: ${{ matrix.os }}
     env:
@@ -108,11 +112,30 @@ jobs:
         run: cargo build --release --locked --target ${{ matrix.target }}
 
       - name: Package artifact
+        if: runner.os != 'Windows'
         shell: bash
         run: cp target/${{ matrix.target }}/release/herdr ${{ matrix.name }}
 
+      - name: Package artifact
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          $package = Join-Path $env:RUNNER_TEMP "Microsoft.Windows.Console.ConPTY.nupkg"
+          $stage = Join-Path $env:RUNNER_TEMP "ke-windows-x86_64"
+          .\scripts\package_windows_conpty.ps1 `
+            -HerdrExe target\${{ matrix.target }}\release\herdr.exe `
+            -PackagePath $package `
+            -StageDir $stage `
+            -OutputPath ${{ matrix.name }}
+          $version = (& (Join-Path $stage "herdr.exe") --version | Out-String).Trim()
+          $tagVersion = $env:GITHUB_REF_NAME -replace '^ke-v', ''
+          if ($version -notmatch [regex]::Escape($tagVersion)) {
+            throw "Packaged Windows binary has unexpected version identity: $version"
+          }
+
       - name: Smoke test version identity
-        if: matrix.smoke
+        if: matrix.smoke && runner.os != 'Windows'
         shell: bash
         run: |
           version=$(./${{ matrix.name }} --version)
@@ -152,9 +175,10 @@ jobs:
           mkdir release
           cp artifacts/ke-* release/
           cp distribution/ke-install.sh release/ke-install.sh
+          cp distribution/ke-install.ps1 release/ke-install.ps1
           cp LICENSE release/LICENSE
           cd release
-          sha256sum ke-linux-x86_64 ke-linux-aarch64 ke-macos-x86_64 ke-macos-aarch64 > SHA256SUMS
+          sha256sum ke-linux-x86_64 ke-linux-aarch64 ke-macos-x86_64 ke-macos-aarch64 ke-windows-x86_64.zip > SHA256SUMS
           cat SHA256SUMS
 
       - name: Create release
@@ -166,10 +190,18 @@ jobs:
           cat > notes.md <<EOF
           ke (壳) ${GITHUB_REF_NAME#ke-v} — a modified fork of [herdr](https://github.com/herdrdev/herdr) ${base}, licensed under Apache-2.0. ke is not herdr and is not affiliated with or endorsed by the herdr project. Every change relative to upstream is listed in [FORK.md](https://github.com/${GITHUB_REPOSITORY}/blob/${GITHUB_REF_NAME}/FORK.md).
 
-          Install or update (macOS and Linux, x86_64 and aarch64):
+          Install or update:
+
+          macOS and Linux (x86_64 / aarch64):
 
           \`\`\`
           curl -fsSL https://github.com/${GITHUB_REPOSITORY}/releases/latest/download/ke-install.sh | sh
+          \`\`\`
+
+          Windows (x86_64):
+
+          \`\`\`
+          powershell -ExecutionPolicy Bypass -c "irm https://github.com/${GITHUB_REPOSITORY}/releases/latest/download/ke-install.ps1 | iex"
           \`\`\`
           EOF
           gh release create "$GITHUB_REF_NAME" release/* \

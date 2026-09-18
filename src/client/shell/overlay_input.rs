@@ -46,6 +46,19 @@ impl ClientShellState {
         }
     }
 
+    // Modified by ke: local-only `@ke` overlay; closing must not dismiss a product announcement.
+    pub(super) fn scroll_ke_chat(&mut self, delta: isize) {
+        let max_scroll = self.hits.ke_chat_max_scroll;
+        if let Some(ClientShellOverlay::KeChat(overlay)) = self.overlay.as_mut() {
+            overlay.scroll = if delta.is_negative() {
+                overlay.scroll.saturating_sub(delta.unsigned_abs())
+            } else {
+                overlay.scroll.saturating_add(delta.unsigned_abs())
+            }
+            .min(max_scroll);
+        }
+    }
+
     pub(super) fn set_product_announcement_offset_from_bottom(
         &mut self,
         offset_from_bottom: usize,
@@ -521,6 +534,47 @@ impl ClientShellState {
                         announcement.scroll =
                             u16::try_from(self.hits.product_announcement_max_scroll)
                                 .unwrap_or(u16::MAX);
+                    }
+                    outcome.repaint = true;
+                }
+                _ => {}
+            }
+            return;
+        }
+
+        // Modified by ke: Esc/Enter close locally; arrows scroll the `@ke` answer.
+        if matches!(self.overlay, Some(ClientShellOverlay::KeChat(_))) {
+            match key.code {
+                KeyCode::Enter | KeyCode::Esc => {
+                    self.overlay = None;
+                    self.chrome_drag = None;
+                    outcome.repaint = true;
+                }
+                KeyCode::Up | KeyCode::Char('k') => {
+                    self.scroll_ke_chat(-1);
+                    outcome.repaint = true;
+                }
+                KeyCode::Down | KeyCode::Char('j') => {
+                    self.scroll_ke_chat(1);
+                    outcome.repaint = true;
+                }
+                KeyCode::PageUp => {
+                    self.scroll_ke_chat(-8);
+                    outcome.repaint = true;
+                }
+                KeyCode::PageDown => {
+                    self.scroll_ke_chat(8);
+                    outcome.repaint = true;
+                }
+                KeyCode::Home => {
+                    if let Some(ClientShellOverlay::KeChat(overlay)) = self.overlay.as_mut() {
+                        overlay.scroll = 0;
+                    }
+                    outcome.repaint = true;
+                }
+                KeyCode::End => {
+                    if let Some(ClientShellOverlay::KeChat(overlay)) = self.overlay.as_mut() {
+                        overlay.scroll = self.hits.ke_chat_max_scroll;
                     }
                     outcome.repaint = true;
                 }

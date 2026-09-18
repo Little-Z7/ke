@@ -8,8 +8,12 @@
 //! The process is deliberately dumb about lifecycle: when the API stops answering it exits, and
 //! the supervisor in the server decides whether to start it again.
 
+pub(crate) mod answer;
+pub(crate) mod model;
 pub(crate) mod panel;
 pub(crate) mod processor;
+pub(crate) mod prompt;
+pub(crate) mod snapshot;
 pub(crate) mod supervisor;
 
 use std::io;
@@ -103,6 +107,16 @@ fn run(
     let processor_thread = std::thread::Builder::new()
         .name("ke-resident-processor".into())
         .spawn(move || processor.serve())?;
+    let answerer_thread = std::thread::Builder::new()
+        .name("ke-resident-answerer".into())
+        .spawn({
+            let client = client.clone();
+            let paths = paths.clone();
+            let ke = config.ke.clone();
+            let shared = Arc::clone(&shared);
+            let stop = Arc::clone(&stop);
+            move || answer::run(client, paths, ke, shared, stop)
+        })?;
     {
         // Ctrl-C / SIGTERM when run by hand; the supervisor stops us by removing the socket file.
         let stop = Arc::clone(&stop);
@@ -154,6 +168,7 @@ fn run(
     let _ = std::fs::remove_file(&paths.panel_file);
     // The processor thread wakes from `accept` when the socket file is gone or on its own timeout.
     let _ = processor_thread.join();
+    let _ = answerer_thread.join();
     Ok(())
 }
 
@@ -180,5 +195,13 @@ fn fetch_agents(client: &ApiClient) -> Result<Vec<AgentInfo>, String> {
 pub(crate) fn write_atomic(path: &std::path::Path, text: &str) -> io::Result<()> {
     let tmp = path.with_extension("json.tmp");
     std::fs::write(&tmp, text)?;
-    std::fs::rename(&tmp, path)
+    match std::fs::rename(&tmp, path) {
+        Ok(()) => Ok(()),
+        #[cfg(windows)]
+        Err(_) if path.exists() => {
+            std::fs::remove_file(path)?;
+            std::fs::rename(&tmp, path)
+        }
+        Err(err) => Err(err),
+    }
 }

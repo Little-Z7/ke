@@ -276,6 +276,11 @@ fn every_dialog_and_menu_occludes_its_panel_not_the_whole_screen() {
             loading_integrations: false,
             installing_integrations: false,
         }),
+        ClientShellOverlay::KeChat(super::super::ke_chat::ClientKeChatOverlay {
+            title: "管家".into(),
+            body: "body".into(),
+            scroll: 0,
+        }),
     ];
     for overlay in overlays {
         let mut state = ClientShellState::new(ClientShellConfig::from_config(&Config::default()));

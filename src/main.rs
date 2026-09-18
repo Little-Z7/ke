@@ -175,6 +175,7 @@ const DEFAULT_CONFIG: &str = r##"# herdr configuration
 # rename_pane = "prefix+shift+p"
 # edit_scrollback = "prefix+e"
 # toggle_composer = "prefix+i"
+# ke_chat = "prefix+shift+i"
 # focus_pane_left = "prefix+h"
 # focus_pane_down = "prefix+j"
 # focus_pane_up = "prefix+k"

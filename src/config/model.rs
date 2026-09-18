@@ -332,7 +332,7 @@ pub struct Config {
 #[derive(Debug, Clone, Default, PartialEq, Eq, Deserialize)]
 #[serde(default)]
 pub struct KeConfig {
-    /// Unix socket of the composer processor (redaction / resident model). `KE_COMPOSER_SOCKET`
+    /// Local socket of the composer processor (redaction / resident model). `KE_COMPOSER_SOCKET`
     /// overrides it. When set, a failing processor blocks sends; unset uses the resident's
     /// `composer.sock` only while that socket exists, otherwise text passes through unchanged.
     pub composer_socket: Option<String>,
@@ -396,7 +396,6 @@ pub struct KeModelProfile {
 
 impl KeModelProfile {
     /// Whether requests stay on this machine (no cloud confirmation needed).
-    #[allow(dead_code)] // consumed by the resident's model half (next milestone)
     pub fn is_local(&self) -> bool {
         if self.provider == "cli" {
             return true;
@@ -503,10 +502,37 @@ impl KeConfig {
         default_file
     }
 
+    /// Session `resident/chat.jsonl`. Unlike the composer socket, the file does not need to exist
+    /// yet: the client watches the path so the first write after startup is visible.
+    #[allow(clippy::unused_self)] // same shape as panel_file_path; not a config key yet
+    pub fn chat_log_path(&self) -> Option<std::path::PathBuf> {
+        Some(crate::ke::paths::ResidentPaths::for_active_session().chat_log)
+    }
+
     /// The active model profile, if it exists.
-    #[allow(dead_code)] // consumed by the resident's model half (next milestone)
     pub fn active_profile(&self) -> Option<&KeModelProfile> {
         self.model.profiles.get(&self.model.active)
+    }
+
+    /// Active profile, or the built-in local Ollama preset when `active == "local"` and
+    /// `profiles` is empty.
+    pub fn resolved_profile(&self) -> Option<(String, KeModelProfile)> {
+        if let Some(profile) = self.active_profile() {
+            return Some((self.model.active.clone(), profile.clone()));
+        }
+        if self.model.active == "local" && self.model.profiles.is_empty() {
+            return Some((
+                "local".into(),
+                KeModelProfile {
+                    provider: "openai".into(),
+                    base_url: "http://localhost:11434/v1".into(),
+                    api_key_env: String::new(),
+                    model: "qwen3:4b".into(),
+                    command: Vec::new(),
+                },
+            ));
+        }
+        None
     }
 
     /// Rule families as the gate consumes them.
@@ -606,6 +632,9 @@ pub struct KeysConfig {
     pub edit_scrollback: BindingConfig,
     /// Modified by ke: toggle the composer bar under the pane surface. Default: "prefix+i".
     pub toggle_composer: BindingConfig,
+    /// Modified by ke: focus the composer and prefill `@ke `. Default: "prefix+shift+i"
+    /// (`prefix+k` is already focus-pane-up).
+    pub ke_chat: BindingConfig,
     /// Enter keyboard copy mode for the focused pane. Default: "prefix+[".
     pub copy_mode: BindingConfig,
     /// Focus the pane to the left. Default: "prefix+h".
@@ -740,6 +769,8 @@ pub(crate) struct KeysConfigOverlay {
     #[serde(skip_serializing_if = "Option::is_none")]
     toggle_composer: Option<BindingConfig>,
     #[serde(skip_serializing_if = "Option::is_none")]
+    ke_chat: Option<BindingConfig>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     copy_mode: Option<BindingConfig>,
     #[serde(skip_serializing_if = "Option::is_none")]
     focus_pane_left: Option<BindingConfig>,
@@ -850,6 +881,7 @@ impl<'de> Deserialize<'de> for KeysConfig {
         apply_field!(rename_pane);
         apply_field!(edit_scrollback);
         apply_field!(toggle_composer);
+        apply_field!(ke_chat);
         apply_field!(copy_mode);
         apply_field!(focus_pane_left);
         apply_field!(focus_pane_down);
@@ -955,6 +987,7 @@ impl KeysConfig {
         copy_effective_action_field!(rename_pane, keybinds.rename_pane);
         copy_effective_action_field!(edit_scrollback, keybinds.edit_scrollback);
         copy_effective_action_field!(toggle_composer, keybinds.toggle_composer);
+        copy_effective_action_field!(ke_chat, keybinds.ke_chat);
         copy_effective_action_field!(copy_mode, keybinds.copy_mode);
         copy_effective_action_field!(focus_pane_left, keybinds.focus_pane_left);
         copy_effective_action_field!(focus_pane_down, keybinds.focus_pane_down);
@@ -1324,6 +1357,7 @@ impl Default for KeysConfig {
             rename_pane: BindingConfig::one("prefix+shift+p"),
             edit_scrollback: BindingConfig::one("prefix+e"),
             toggle_composer: BindingConfig::one("prefix+i"), // Modified by ke
+            ke_chat: BindingConfig::one("prefix+shift+i"),   // Modified by ke
             copy_mode: BindingConfig::one("prefix+["),
             focus_pane_left: BindingConfig::one("prefix+h"),
             focus_pane_down: BindingConfig::one("prefix+j"),
@@ -1804,6 +1838,45 @@ emails = true
     }
 
     #[test]
+    fn ke_resolved_profile_falls_back_to_builtin_local() {
+        let default_config = Config::default();
+        assert!(default_config.ke.active_profile().is_none());
+        let (name, profile) = default_config.ke.resolved_profile().expect("builtin local");
+        assert_eq!(name, "local");
+        assert_eq!(profile.provider, "openai");
+        assert_eq!(profile.base_url, "http://localhost:11434/v1");
+        assert_eq!(profile.model, "qwen3:4b");
+        assert!(profile.api_key_env.is_empty());
+        assert!(profile.is_local());
+
+        let missing_active: Config = toml::from_str(
+            r#"
+[ke.model]
+active = "ark"
+"#,
+        )
+        .unwrap();
+        assert!(missing_active.ke.resolved_profile().is_none());
+
+        let named: Config = toml::from_str(
+            r#"
+[ke.model]
+active = "local"
+
+[ke.model.profiles.local]
+provider = "openai"
+base_url = "http://127.0.0.1:11434/v1"
+model = "custom:tag"
+"#,
+        )
+        .unwrap();
+        let (name, profile) = named.ke.resolved_profile().expect("named local");
+        assert_eq!(name, "local");
+        assert_eq!(profile.model, "custom:tag");
+        assert_eq!(profile.base_url, "http://127.0.0.1:11434/v1");
+    }
+
+    #[test]
     fn ke_composer_socket_prefers_env_then_config_then_existing_default() {
         use std::path::{Path, PathBuf};
         let default_socket = PathBuf::from("/cfg/ke/resident/composer.sock");
@@ -1874,6 +1947,17 @@ emails = true
             default_file
         );
         assert_eq!(KeConfig::panel_file_from(None, None, None, None), None);
+    }
+
+    #[test]
+    fn ke_chat_log_path_defaults_to_session_resident_file() {
+        let path = KeConfig::default()
+            .chat_log_path()
+            .expect("session chat log path");
+        assert_eq!(
+            path.file_name().and_then(|name| name.to_str()),
+            Some("chat.jsonl")
+        );
     }
 
     #[test]

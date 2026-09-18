@@ -140,6 +140,11 @@ pub(super) struct ShellHitMap {
     pub(super) release_notes_scrollbar: Rect,
     pub(super) release_notes_scroll_metrics: Option<crate::pane::ScrollMetrics>,
     pub(super) release_notes_max_scroll: usize,
+    /// Modified by ke: max scroll offset for the `@ke` transcript in the composer dock.
+    pub(super) ke_chat_max_scroll: usize,
+    pub(super) composer_input: Rect,
+    pub(super) composer_toggle: Rect,
+    pub(super) composer_chat: Rect,
 }
 
 #[derive(Clone)]
@@ -290,6 +295,7 @@ pub(super) enum ClientShellOverlayKind {
     ContextMenu,
     GlobalMenu,
     Settings,
+    KeChat, // Modified by ke
 }
 
 #[derive(Debug)]
@@ -586,6 +592,8 @@ pub(super) enum ClientShellOverlay {
     ContextMenu(ClientContextMenuOverlay),
     GlobalMenu(ClientGlobalMenuOverlay),
     Settings(ClientSettingsOverlay),
+    #[allow(dead_code)] // still rendered if opened; default view is the composer dock
+    KeChat(super::ke_chat::ClientKeChatOverlay), // Modified by ke
 }
 
 impl ClientShellOverlay {
@@ -604,6 +612,7 @@ impl ClientShellOverlay {
             Self::ContextMenu(_) => ClientShellOverlayKind::ContextMenu,
             Self::GlobalMenu(_) => ClientShellOverlayKind::GlobalMenu,
             Self::Settings(_) => ClientShellOverlayKind::Settings,
+            Self::KeChat(_) => ClientShellOverlayKind::KeChat, // Modified by ke
         }
     }
 }
@@ -888,6 +897,7 @@ pub(crate) struct ClientShellState {
     pub(super) composer_hook: super::composer::ComposerHook,
     pub(super) composer_pending: Option<super::composer::ComposerPending>, // Modified by ke
     pub(super) ke_panel: super::ke_panel::KePanelSource,                   // Modified by ke
+    pub(super) ke_chat: super::ke_chat::KeChatSource,                      // Modified by ke
     pub(super) previous_pane_id: Option<String>,
     pub(super) pane_mouse_gesture: Option<ClientPaneMouseGesture>,
     pub(super) link_hover: Option<super::link_hover::LinkHover>,
@@ -1005,6 +1015,7 @@ impl ClientShellState {
                 .extend(saved.collapsed_groups);
         }
         let ke_panel = super::ke_panel::KePanelSource::new(config.ke.panel_file_path()); // Modified by ke
+        let ke_chat = super::ke_chat::KeChatSource::new(config.ke.chat_log_path()); // Modified by ke
         Self {
             config,
             snapshot: None,
@@ -1077,10 +1088,11 @@ impl ClientShellState {
             host_mouse_pixels: None,
             input_leases: ClientInputLeases::default(),
             popup_pending: false,
-            composer: None,
+            composer: Some(super::composer::ClientComposer::default()),
             composer_hook: super::composer::call_composer_hook,
             composer_pending: None, // Modified by ke
             ke_panel,               // Modified by ke
+            ke_chat,                // Modified by ke
             popup_pending_deadline: None,
             next_request_id: 1,
             pending_requests: HashMap::new(),
@@ -1205,10 +1217,9 @@ impl ClientShellState {
     // Modified by ke: reserve rows under the pane surface for the composer bar while it is open.
     pub(super) fn layout(&self, cols: u16, rows: u16) -> ClientShellLayout {
         let mut layout = self.base_layout(cols, rows);
-        if self.composer.is_some()
-            && layout.pane_surface.height > super::composer::COMPOSER_ROWS + 2
-        {
-            layout.pane_surface.height -= super::composer::COMPOSER_ROWS;
+        let reserved = self.composer_reserved_rows();
+        if reserved > 0 && layout.pane_surface.height > reserved + 2 {
+            layout.pane_surface.height -= reserved;
         }
         layout
     }
@@ -1816,6 +1827,15 @@ impl ClientShellState {
     // Modified by ke: refresh the coordinator panel from the main-loop timer.
     pub(crate) fn tick_ke_panel(&mut self, now: std::time::Instant) -> bool {
         self.ke_panel.tick(now)
+    }
+
+    // Modified by ke: poll resident/chat.jsonl into the composer dock, not a modal.
+    pub(crate) fn tick_ke_chat(&mut self, now: std::time::Instant) -> bool {
+        let overlay_blocking = self.overlay.is_some();
+        let Some(next) = self.ke_chat.tick(now, overlay_blocking) else {
+            return false;
+        };
+        self.set_composer_chat(next)
     }
 
     pub(crate) fn tick_copy_feedback(&mut self, now: std::time::Instant) -> bool {

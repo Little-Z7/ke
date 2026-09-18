@@ -50,10 +50,6 @@ pub(crate) fn apply_config(config: &Config) {
     if !wanted.enabled {
         return;
     }
-    if cfg!(not(unix)) {
-        tracing::warn!("ke resident needs a unix socket; not starting on this platform");
-        return;
-    }
     *guard = Some(start(wanted.clone()));
 }
 

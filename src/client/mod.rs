@@ -2112,7 +2112,8 @@ async fn run_client_loop(
                         outcome.repaint |= notification_repaint
                             | shell.tick_copy_feedback(now)
                             | shell.tick_endpoint_error(now)
-                            | shell.tick_ke_panel(now); // Modified by ke
+                            | shell.tick_ke_panel(now) // Modified by ke
+                            | shell.tick_ke_chat(now); // Modified by ke
                         let frame = outcome
                             .repaint
                             .then(|| shell.compose(state.reported_size.0, state.reported_size.1))

@@ -4,7 +4,7 @@
 //!
 //! ```text
 //! <session data dir>/resident/
-//!   composer.sock   composer processor (Unix socket)
+//!   composer.sock   composer processor (local socket / named pipe)
 //!   panel.json      sidebar panel
 //!   chat.jsonl      @ke conversation, append-only
 //!   taskboard.json  per-session task board

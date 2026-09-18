@@ -91,6 +91,7 @@ impl ClientShellState {
                 }
                 // Modified by ke: follow a changed [ke] panel_file without restarting.
                 self.ke_panel.set_path(self.config.ke.panel_file_path());
+                self.ke_chat.set_path(self.config.ke.chat_log_path());
                 self.set_local_config_diagnostic(self.config.local_config_diagnostic(&diagnostics));
                 if let Some(snapshot) = self.snapshot.as_deref() {
                     let profile = snapshot.server_keybindings_toml.clone();

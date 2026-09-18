@@ -140,6 +140,10 @@ impl ClientShellState {
                     self.toggle_composer(outcome);
                     return;
                 }
+                if action == crate::input::KeybindAction::KeChat {
+                    self.open_ke_chat_prompt(outcome);
+                    return;
+                }
                 if action == crate::input::KeybindAction::RenamePane {
                     self.open_rename_pane_overlay();
                     outcome.repaint = true;

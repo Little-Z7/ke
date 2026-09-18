@@ -348,6 +348,7 @@ pub struct Keybinds {
     pub rename_pane: ActionKeybinds,
     pub edit_scrollback: ActionKeybinds,
     pub toggle_composer: ActionKeybinds, // Modified by ke
+    pub ke_chat: ActionKeybinds,         // Modified by ke
     pub copy_mode: ActionKeybinds,
     pub focus_pane_left: ActionKeybinds,
     pub focus_pane_down: ActionKeybinds,
@@ -517,6 +518,7 @@ impl Config {
             rename_pane: empty_action!(),
             edit_scrollback: empty_action!(),
             toggle_composer: empty_action!(),
+            ke_chat: empty_action!(),
             copy_mode: empty_action!(),
             focus_pane_left: empty_action!(),
             focus_pane_down: empty_action!(),
@@ -665,6 +667,7 @@ impl Config {
             apply_action!(keybinds.rename_pane, rename_pane, source);
             apply_action!(keybinds.edit_scrollback, edit_scrollback, source);
             apply_action!(keybinds.toggle_composer, toggle_composer, source);
+            apply_action!(keybinds.ke_chat, ke_chat, source);
             apply_action!(keybinds.copy_mode, copy_mode, source);
             apply_action!(keybinds.focus_pane_left, focus_pane_left, source);
             apply_action!(keybinds.focus_pane_down, focus_pane_down, source);

@@ -28,6 +28,7 @@ pub(crate) struct OverlayRender {
     pub(crate) release_notes_scrollbar: Rect,
     pub(crate) release_notes_scroll_metrics: Option<crate::pane::ScrollMetrics>,
     pub(crate) release_notes_max_scroll: usize,
+    pub(crate) ke_chat_max_scroll: usize, // Modified by ke
     pub(crate) cursor: Option<crate::protocol::CursorState>,
 }
 
@@ -78,6 +79,7 @@ pub(crate) fn render_client_overlay(
             worktree_overlays::render_worktree_remove_overlay(b, v, p)
         }
         ClientShellOverlay::ContextMenu(_) | ClientShellOverlay::GlobalMenu(_) => None,
+        ClientShellOverlay::KeChat(v) => render_ke_chat_overlay(b, v, p), // Modified by ke
     }
 }
 
@@ -527,6 +529,113 @@ fn render_product_announcement_overlay(
         product_announcement_scrollbar: track.unwrap_or_default(),
         product_announcement_scroll_metrics: Some(metrics),
         product_announcement_max_scroll: max_scroll,
+        ..OverlayRender::default()
+    })
+}
+
+// Modified by ke: `@ke` answer overlay, same chrome as the product announcement modal.
+fn render_ke_chat_overlay(
+    b: &mut Buffer,
+    overlay: &super::super::ke_chat::ClientKeChatOverlay,
+    p: &Palette,
+) -> Option<OverlayRender> {
+    let outer = popup(b.area, 72, 20)?;
+    let inner = panel(b, outer, p.accent, p.panel_bg)?;
+    if inner.height < 8 || inner.width < 20 {
+        return Some(OverlayRender {
+            area: outer,
+            ..OverlayRender::default()
+        });
+    }
+
+    let stack = crate::ui::modal_stack_areas(inner, 2, 1, 0, 1);
+    let title_area = Rect::new(
+        stack.header.x.saturating_add(1),
+        stack.header.y,
+        stack.header.width.saturating_sub(2),
+        1,
+    );
+    let subtitle_area = Rect::new(
+        stack.header.x.saturating_add(1),
+        stack.header.y.saturating_add(1),
+        stack.header.width.saturating_sub(2),
+        1,
+    );
+    let base = Style::default()
+        .bg(p.panel_bg)
+        .remove_modifier(Modifier::DIM);
+    put_text(
+        b,
+        title_area.x,
+        title_area.y,
+        title_area.width,
+        &overlay.title,
+        base.fg(p.text).add_modifier(Modifier::BOLD),
+    );
+    put_text(
+        b,
+        subtitle_area.x,
+        subtitle_area.y,
+        subtitle_area.width,
+        "@ke",
+        base.fg(p.overlay1),
+    );
+    let close = crate::ui::release_notes_close_button_rect(Rect::new(
+        stack.header.x,
+        stack.header.y,
+        stack.header.width,
+        1,
+    ));
+    button(
+        b,
+        close,
+        " esc close ",
+        Style::default()
+            .fg(contrast(p))
+            .bg(p.accent)
+            .add_modifier(Modifier::BOLD)
+            .remove_modifier(Modifier::DIM),
+    );
+
+    let body = stack.content;
+    let announcement = crate::app::state::ProductAnnouncementState {
+        version: String::new(),
+        id: String::new(),
+        title: overlay.title.clone(),
+        body: overlay.body.clone(),
+        scroll: u16::try_from(overlay.scroll).unwrap_or(u16::MAX),
+        preview: false,
+    };
+    let lines = crate::ui::product_announcement_display_lines(&announcement, p);
+    let metrics = crate::ui::product_announcement_scroll_metrics(&announcement, body, p);
+    let max_scroll = metrics.max_offset_from_bottom;
+    let scroll = overlay.scroll.min(max_scroll);
+    let paragraph = ratatui::widgets::Paragraph::new(
+        lines.into_iter().map(|(_, line)| line).collect::<Vec<_>>(),
+    )
+    .wrap(ratatui::widgets::Wrap { trim: false })
+    .scroll((u16::try_from(scroll).unwrap_or(u16::MAX), 0));
+    ratatui::widgets::Widget::render(paragraph, body, b);
+
+    if let Some(footer_area) = stack.footer {
+        let footer_line = ratatui::text::Line::from(vec![
+            ratatui::text::Span::styled(" scroll ", base.fg(p.overlay0)),
+            ratatui::text::Span::styled("wheel ↑↓", base.fg(p.text)),
+            ratatui::text::Span::styled("  ·  ", base.fg(p.overlay0)),
+            ratatui::text::Span::styled("close", base.fg(p.overlay0)),
+            ratatui::text::Span::styled(" esc / enter ", base.fg(p.text)),
+        ]);
+        ratatui::widgets::Widget::render(
+            ratatui::widgets::Paragraph::new(footer_line),
+            footer_area,
+            b,
+        );
+    }
+
+    Some(OverlayRender {
+        area: outer,
+        primary: close,
+        ke_chat_max_scroll: max_scroll,
         ..OverlayRender::default()
     })
 }

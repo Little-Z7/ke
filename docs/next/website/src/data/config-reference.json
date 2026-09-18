@@ -836,6 +836,12 @@
           "description": "ke only: toggle the composer bar under the focused agent pane."
         },
         {
+          "key": "keys.ke_chat",
+          "type": "keybinding",
+          "default": "\"prefix+shift+i\"",
+          "description": "ke only: focus the composer and prefill `@ke `."
+        },
+        {
           "key": "keys.indexed.tabs",
           "type": "string",
           "default": "unset",
@@ -1452,7 +1458,7 @@
           "key": "ke.composer_socket",
           "type": "string",
           "default": "unset",
-          "description": "ke only: Unix socket of the composer processor. `KE_COMPOSER_SOCKET` overrides it. Set: a failing processor blocks sends. Unset: the resident's `composer.sock` in the session's `resident/` directory while it exists, otherwise text passes through unchanged."
+          "description": "ke only: local socket of the composer processor (Unix domain socket or Windows named pipe). `KE_COMPOSER_SOCKET` overrides it. Set: a failing processor blocks sends. Unset: the resident's `composer.sock` in the session's `resident/` directory while it exists, otherwise text passes through unchanged."
         },
         {
           "key": "ke.panel_file",

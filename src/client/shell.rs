@@ -38,6 +38,8 @@ mod worktrees;
 // Modified by ke: the shell's own modules stay together at the end of the list so upstream
 // insertions above never collide with them.
 mod composer;
+mod ke_chat;
+mod ke_cmd;
 mod ke_panel;
 use text_editor::TextEditor;
 use word_selection::ClientWordSelection;

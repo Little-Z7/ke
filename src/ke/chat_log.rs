@@ -87,7 +87,6 @@ pub(crate) fn append(path: &Path, entry: &ChatEntry) -> std::io::Result<()> {
 }
 
 /// Reads the last `limit` well-formed entries. A missing file is an empty log.
-#[allow(dead_code)] // the client's chat popup reads the log (next milestone)
 pub(crate) fn read_tail(path: &Path, limit: usize) -> std::io::Result<Vec<ChatEntry>> {
     let file = match std::fs::File::open(path) {
         Ok(file) => file,

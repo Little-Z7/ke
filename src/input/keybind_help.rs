@@ -164,6 +164,7 @@ pub(crate) fn keybind_help_groups(
                     binding_label(&keybinds.toggle_composer),
                     "toggle ke composer",
                 ),
+                entry(binding_label(&keybinds.ke_chat), "talk to ke"),
                 entry(binding_label(&keybinds.copy_mode), "copy mode"),
                 entry(binding_label(&keybinds.zoom), "zoom pane"),
                 entry(binding_label(&keybinds.resize_mode), "resize mode"),

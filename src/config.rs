@@ -52,7 +52,7 @@ pub(crate) use self::{
 };
 
 // Modified by ke: the [ke] section and its sub-tables.
-pub(crate) use self::model::{KeConfig, KeModelConfig};
+pub(crate) use self::model::{KeConfig, KeModelConfig, KeModelProfile};
 pub(crate) use self::{keybinds::CommandKeybindType, model::KeysConfig};
 
 pub const CONFIG_PATH_ENV_VAR: &str = "HERDR_CONFIG_PATH";

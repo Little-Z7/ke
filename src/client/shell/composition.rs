@@ -313,13 +313,20 @@ impl ClientShellState {
         }
         // Modified by ke: draw the composer bar in the rows reserved under the pane surface.
         let composer_cursor = match (self.composer_area(cols, rows), self.composer.as_ref()) {
-            (Some(area), Some(composer)) => super::composer::render_composer(
-                &mut buffer,
-                area,
-                composer,
-                &self.composer_target_label(),
-                &self.config.palette,
-            ),
+            (Some(area), Some(composer)) => {
+                let rendered = super::composer::render_composer(
+                    &mut buffer,
+                    area,
+                    composer,
+                    &self.composer_target_label(),
+                    &self.config.palette,
+                );
+                self.hits.composer_input = rendered.input;
+                self.hits.composer_toggle = rendered.toggle;
+                self.hits.composer_chat = rendered.chat;
+                self.hits.ke_chat_max_scroll = rendered.max_scroll;
+                rendered.cursor
+            }
             _ => None,
         };
         let mut frame = FrameData::from_ratatui_buffer_with_hyperlinks(&buffer, None, &[]);
@@ -683,6 +690,7 @@ impl ClientShellState {
                 self.hits.release_notes_scrollbar = rendered.release_notes_scrollbar;
                 self.hits.release_notes_scroll_metrics = rendered.release_notes_scroll_metrics;
                 self.hits.release_notes_max_scroll = rendered.release_notes_max_scroll;
+                self.hits.ke_chat_max_scroll = rendered.ke_chat_max_scroll; // Modified by ke
                 rendered.cursor
             };
             frame.replace_from_ratatui_buffer_preserving_effects(&composed, cursor);
@@ -699,6 +707,10 @@ impl ClientShellState {
             notes.scroll = notes
                 .scroll
                 .min(u16::try_from(self.hits.release_notes_max_scroll).unwrap_or(u16::MAX));
+        }
+        // Modified by ke: clamp the `@ke` overlay to the last measured wrap height.
+        if let Some(ClientShellOverlay::KeChat(overlay)) = self.overlay.as_mut() {
+            overlay.scroll = overlay.scroll.min(self.hits.ke_chat_max_scroll);
         }
         if self.endpoint_status(&self.active_endpoint_id) != Some(ClientEndpointStatus::Online) {
             frame.cursor = None;

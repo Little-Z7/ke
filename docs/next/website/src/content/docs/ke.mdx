@@ -20,9 +20,15 @@ macOS and Linux (x86_64 / aarch64):
 curl -fsSL https://github.com/Little-Z7/ke/releases/latest/download/ke-install.sh | sh
 ```
 
-The script installs `~/.local/bin/ke` (`KE_INSTALL_DIR` changes it) after checking the release `SHA256SUMS`. Set `KE_RELEASE_TAG=ke-v0.1.0` to pin a version. Run it again to update; `ke update` refuses on purpose and prints this command instead.
+Windows (x86_64):
 
-To build from source, run `scripts/ke-install.sh` in a checkout (needs Rust and the Zig version pinned in `vendor/libghostty-vt/build.zig.zon`, 0.16.0 for herdr 0.9.1). Do not use `cargo install`: it would produce a binary named `herdr`.
+```powershell
+powershell -ExecutionPolicy Bypass -c "irm https://github.com/Little-Z7/ke/releases/latest/download/ke-install.ps1 | iex"
+```
+
+The Unix script installs `~/.local/bin/ke` (`KE_INSTALL_DIR` changes it). The Windows script installs `%LOCALAPPDATA%\Programs\ke\ke.exe` plus the ConPTY runtime and adds that folder to your user PATH. Both check the release `SHA256SUMS`. Set `KE_RELEASE_TAG=ke-v0.1.0` to pin a version. Run the installer again to update; `ke update` refuses on purpose and prints the matching command.
+
+To build from source on Unix, run `scripts/ke-install.sh` in a checkout (needs Rust and the Zig version pinned in `vendor/libghostty-vt/build.zig.zon`, 0.16.0 for herdr 0.9.1). On Windows, use the zip installer above, or `cargo build --release` plus `scripts/package_windows_conpty.ps1` and install `herdr.exe` as `ke.exe`. Do not use `cargo install`: it would produce a binary named `herdr`.
 
 ## Isolation from herdr
 
@@ -46,7 +52,7 @@ The bar never sends on its own. A click on a panel row (below) only fills the ba
 
 ### Processor protocol
 
-The processor listens on a Unix socket. For each submit ke connects, writes one JSON line, and reads one JSON line back:
+The processor listens on a local socket (Unix domain socket, or a named pipe on Windows). For each submit ke connects, writes one JSON line, and reads one JSON line back:
 
 ```json
 {"pane_id":"wA:p2","agent":"claude","text":"deploy with key sk-live-..."}
@@ -99,7 +105,7 @@ Both paths default to `~/.workcat/ke/`. Set them in `config.toml` when the proce
 
 ```toml
 [ke]
-# Unix socket of the composer processor. When set, a failing processor blocks sends.
+# Local socket of the composer processor (Unix domain socket / Windows named pipe). When set, a failing processor blocks sends.
 # Unset: ~/.workcat/ke/composer.sock while it exists, otherwise text passes through unchanged.
 composer_socket = "~/.workcat/ke/composer.sock"
 # panel.json written by the coordinator.
@@ -115,6 +121,5 @@ Changes to `[ke]` apply on the next config reload; the composer socket is resolv
 
 ## Limits
 
-- The processor needs a Unix socket, so the composer bar has no processor on Windows and sends text unchanged there. ke releases are built for macOS and Linux only.
 - Sub-command help and error messages still spell the command `herdr`; read them as `ke`.
 - The processor, the coordinator, and the resident model are not part of ke. Their protocols above are the whole contract.

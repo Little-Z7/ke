@@ -20,9 +20,15 @@ macOS と Linux（x86_64 / aarch64）:
 curl -fsSL https://github.com/Little-Z7/ke/releases/latest/download/ke-install.sh | sh
 ```
 
-スクリプトはリリースの `SHA256SUMS` を確認したうえで `~/.local/bin/ke` にインストールします（`KE_INSTALL_DIR` で変更可）。`KE_RELEASE_TAG=ke-v0.1.0` でバージョンを固定できます。更新はもう一度実行するだけです。`ke update` は意図的に拒否し、このコマンドを表示します。
+Windows（x86_64）:
 
-ソースからビルドする場合はチェックアウト内で `scripts/ke-install.sh` を実行します（Rust と、`vendor/libghostty-vt/build.zig.zon` で固定された Zig が必要。herdr 0.9.1 では 0.16.0）。`cargo install` は使わないでください。`herdr` という名前のバイナリができてしまいます。
+```powershell
+powershell -ExecutionPolicy Bypass -c "irm https://github.com/Little-Z7/ke/releases/latest/download/ke-install.ps1 | iex"
+```
+
+Unix 向けスクリプトは `~/.local/bin/ke` に入れます（`KE_INSTALL_DIR` で変更可）。Windows 向けスクリプトは `%LOCALAPPDATA%\Programs\ke\ke.exe` と ConPTY ランタイムを入れ、そのフォルダをユーザー PATH に追加します。どちらもリリースの `SHA256SUMS` を確認します。`KE_RELEASE_TAG=ke-v0.1.0` でバージョンを固定できます。更新はもう一度実行するだけです。`ke update` は意図的に拒否し、その環境向けのインストールコマンドを表示します。
+
+Unix でソースからビルドする場合はチェックアウト内で `scripts/ke-install.sh` を実行します（Rust と、`vendor/libghostty-vt/build.zig.zon` で固定された Zig が必要。herdr 0.9.1 では 0.16.0）。Windows では上の zip インストーラを使うか、`cargo build --release` のあと `scripts/package_windows_conpty.ps1` を実行し、`herdr.exe` を `ke.exe` として入れてください。`cargo install` は使わないでください。`herdr` という名前のバイナリができてしまいます。
 
 ## herdr との分離
 
@@ -46,7 +52,7 @@ ke は上流の Herdr がインストールされた同じマシンで、それ�
 
 ### プロセッサープロトコル
 
-プロセッサーは Unix ソケットで待ち受けます。送信ごとに ke は接続し、JSON を 1 行書き、JSON を 1 行読み戻します。
+プロセッサーはローカルソケット（Unix ドメインソケット、Windows では名前付きパイプ）で待ち受けます。送信ごとに ke は接続し、JSON を 1 行書き、JSON を 1 行読み戻します。
 
 ```json
 {"pane_id":"wA:p2","agent":"claude","text":"deploy with key sk-live-..."}
@@ -99,7 +105,7 @@ ke は上流の Herdr がインストールされた同じマシンで、それ�
 
 ```toml
 [ke]
-# コンポーザープロセッサーの Unix ソケット。設定すると、プロセッサーの失敗は送信をブロックします。
+# コンポーザープロセッサーのローカルソケット（Unix ドメインソケット / Windows 名前付きパイプ）。設定すると、プロセッサーの失敗は送信をブロックします。
 # 未設定: ~/.workcat/ke/composer.sock が存在する間はそれを使い、無ければテキストをそのまま送ります。
 composer_socket = "~/.workcat/ke/composer.sock"
 # コーディネーターが書く panel.json。
@@ -115,6 +121,5 @@ panel_file = "~/.workcat/ke/panel.json"
 
 ## 制限
 
-- プロセッサーは Unix ソケットを必要とするため、Windows ではコンポーザーバーにプロセッサーが無く、テキストはそのまま送られます。ke のリリースは macOS と Linux のみビルドされます。
 - サブコマンドのヘルプとエラーメッセージはまだ `herdr` と表記されています。`ke` と読み替えてください。
 - プロセッサー、コーディネーター、常駐モデルは ke の一部ではありません。上記のプロトコルが契約のすべてです。

@@ -91,14 +91,45 @@ fn pane_input_requests(out: &ClientShellInput) -> usize {
 
 #[test]
 fn toggle_reserves_rows_under_the_pane_surface() {
-    let mut state = state_with_composer(None, fake_send);
-    let open_rows = state.surface_size(120, 40).rows;
+    let mut state = ClientShellState::new(ClientShellConfig::from_config(&Config::default()));
+    state.set_snapshot(Box::new(snapshot()));
+    assert!(state.composer.is_some(), "the dock is always on screen");
+    assert!(state
+        .composer_area(120, 40)
+        .is_some_and(|area| area.height == COMPOSER_ROWS));
+    let closed_focus = state.composer.as_ref().unwrap().focused;
+    assert!(!closed_focus);
+    let out = toggle(&mut state);
+    assert!(out.resize && state.composer.as_ref().unwrap().focused);
     assert!(state
         .composer_area(120, 40)
         .is_some_and(|area| area.height == COMPOSER_ROWS));
     let out = toggle(&mut state);
-    assert!(out.resize && state.composer.is_none());
-    assert_eq!(state.surface_size(120, 40).rows, open_rows + COMPOSER_ROWS);
+    assert!(out.resize && !state.composer.as_ref().unwrap().focused);
+}
+
+#[test]
+fn expanded_ke_chat_grows_the_dock() {
+    use super::super::composer::CHAT_ROWS;
+    use super::super::ke_chat::ClientKeChatOverlay;
+    let mut state = state_with_composer(None, fake_send);
+    assert!(state
+        .composer_area(120, 40)
+        .is_some_and(|area| area.height == COMPOSER_ROWS));
+    state.set_composer_chat(ClientKeChatOverlay {
+        title: "管家".into(),
+        body: "codex 空着".into(),
+        scroll: 0,
+    });
+    assert!(state
+        .composer_area(120, 40)
+        .is_some_and(|area| area.height == COMPOSER_ROWS + CHAT_ROWS));
+    let mut out = ClientShellInput::default();
+    state.toggle_composer_chat(&mut out);
+    assert!(out.resize);
+    assert!(state
+        .composer_area(120, 40)
+        .is_some_and(|area| area.height == COMPOSER_ROWS));
 }
 
 #[test]
@@ -275,14 +306,20 @@ fn clicking_a_panel_row_with_input_opens_the_composer_prefilled() {
     };
     assert_eq!(input, "@ke 继续");
     let (rect, plain_row) = (*rect, rect.y - 1);
-    assert!(state.composer.is_none());
+    assert!(
+        state.composer.as_ref().is_some_and(|c| !c.focused),
+        "dock starts unfocused"
+    );
 
     let out = click(&mut state, rect.x + 1, plain_row);
-    assert!(state.composer.is_none(), "display-only rows do nothing");
+    assert!(
+        !state.composer.as_ref().unwrap().focused,
+        "display-only rows do nothing"
+    );
     assert_eq!(pane_input_requests(&out), 0);
 
     let out = click(&mut state, rect.x + 1, rect.y);
-    assert!(out.repaint && out.resize, "the bar opens");
+    assert!(out.repaint, "the dock focuses");
     assert_eq!(pane_input_requests(&out), 0, "nothing is sent by the click");
     assert!(out.actions.is_empty());
     assert_eq!(
@@ -321,4 +358,75 @@ fn unresponsive_processor_times_out_as_a_block() {
         composer.notice.as_deref(),
         Some("处理进程无响应，未发送，原文保留")
     );
+}
+
+#[test]
+fn ke_slash_help_stays_in_the_dock_and_sends_nothing() {
+    let mut state = state_with_composer(Some("claude"), fake_send);
+    state.handle_input_bytes(b"/ke");
+    let out = submit(&mut state);
+    assert!(out.actions.is_empty());
+    assert_eq!(pane_input_requests(&out), 0);
+    let composer = state.composer.as_ref().expect("composer");
+    assert!(composer.input.is_empty());
+    assert!(composer.chat_expanded);
+    assert_eq!(
+        composer.chat.as_ref().map(|chat| chat.title.as_str()),
+        Some("壳命令")
+    );
+    assert!(composer
+        .chat
+        .as_ref()
+        .is_some_and(|chat| chat.body.contains("/ke model")));
+}
+
+#[test]
+fn slash_escape_sends_the_rest_to_the_processor() {
+    let mut state = state_with_composer(Some("claude"), fake_send);
+    state.handle_input_bytes(b"//clear");
+    let out = submit(&mut state);
+    let [ClientShellAction::Endpoint { request, .. }] = &out.actions[..] else {
+        panic!("expected exactly one endpoint request");
+    };
+    assert!(matches!(
+        &request.method,
+        crate::api::schema::Method::AgentPrompt(params)
+            if params.target == "pane_1" && params.text == "[safe]/clear"
+    ));
+}
+
+#[test]
+fn other_slash_commands_still_go_to_the_pane() {
+    let mut state = state_with_composer(Some("claude"), fake_send);
+    state.handle_input_bytes(b"/compact");
+    let out = submit(&mut state);
+    let [ClientShellAction::Endpoint { request, .. }] = &out.actions[..] else {
+        panic!("expected exactly one endpoint request");
+    };
+    assert!(matches!(
+        &request.method,
+        crate::api::schema::Method::AgentPrompt(params)
+            if params.text == "[safe]/compact"
+    ));
+}
+
+#[test]
+fn ke_chat_binding_prefills_mention() {
+    let mut state = state_with_composer(None, fake_send);
+    let mut out = ClientShellInput::default();
+    state.record_binding(
+        crate::input::KeybindMatch::Action(crate::input::KeybindAction::KeChat),
+        &mut out,
+    );
+    assert_eq!(
+        state
+            .composer
+            .as_ref()
+            .map(|composer| composer.input.as_str()),
+        Some("@ke ")
+    );
+    assert!(state
+        .composer
+        .as_ref()
+        .is_some_and(|composer| composer.focused));
 }

@@ -6,6 +6,9 @@ pub const BASE_VERSION: &str = env!("CARGO_PKG_VERSION");
 // based on. Release tags are `ke-v<KE_VERSION>`; the ke release workflow checks they match.
 pub const KE_VERSION: &str = "0.2.0";
 // Modified by ke: where ke releases and the installer live.
+#[cfg(windows)]
+pub const KE_INSTALL_COMMAND: &str = "powershell -ExecutionPolicy Bypass -c \"irm https://github.com/Little-Z7/ke/releases/latest/download/ke-install.ps1 | iex\"";
+#[cfg(not(windows))]
 pub const KE_INSTALL_COMMAND: &str =
     "curl -fsSL https://github.com/Little-Z7/ke/releases/latest/download/ke-install.sh | sh";
 

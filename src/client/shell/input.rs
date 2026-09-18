@@ -176,6 +176,7 @@ impl ClientShellState {
                             ClientShellOverlay::Onboarding
                                 | ClientShellOverlay::ProductAnnouncement(_)
                                 | ClientShellOverlay::ReleaseNotes(_)
+                                | ClientShellOverlay::KeChat(_) // Modified by ke
                         )
                     ) {
                         self.reconcile_input_source();
@@ -213,6 +214,7 @@ impl ClientShellState {
                             ClientShellOverlay::Onboarding
                                 | ClientShellOverlay::ProductAnnouncement(_)
                                 | ClientShellOverlay::ReleaseNotes(_)
+                                | ClientShellOverlay::KeChat(_) // Modified by ke
                         )
                     ) {
                         self.reconcile_input_source();
@@ -520,6 +522,7 @@ impl ClientShellState {
                 ClientShellOverlay::Onboarding
                     | ClientShellOverlay::ProductAnnouncement(_)
                     | ClientShellOverlay::ReleaseNotes(_)
+                    | ClientShellOverlay::KeChat(_) // Modified by ke
             )
         ) {
             if key.kind == KeyEventKind::Press {
@@ -991,6 +994,7 @@ impl ClientShellState {
                 ClientShellOverlay::Onboarding
                     | ClientShellOverlay::ProductAnnouncement(_)
                     | ClientShellOverlay::ReleaseNotes(_)
+                    | ClientShellOverlay::KeChat(_) // Modified by ke
             )
         ) || self
             .copy_mode

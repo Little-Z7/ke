@@ -5,8 +5,10 @@
 //! - `chat_log`: the append-only `@ke` conversation file shared by resident and client.
 //! - `resident`: the `ke resident` process (composer processor + panel writer + model) and the
 //!   supervisor the server uses to keep it running.
+//! - `slash`: `/ke` commands and `//` passthrough parsed on the client.
 
 pub(crate) mod chat_log;
 pub(crate) mod paths;
 pub(crate) mod redact;
 pub(crate) mod resident;
+pub(crate) mod slash;

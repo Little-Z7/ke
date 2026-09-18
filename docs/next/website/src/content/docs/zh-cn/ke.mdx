@@ -20,9 +20,15 @@ macOS 与 Linux（x86_64 / aarch64）：
 curl -fsSL https://github.com/Little-Z7/ke/releases/latest/download/ke-install.sh | sh
 ```
 
-脚本会按发布中的 `SHA256SUMS` 校验后安装到 `~/.local/bin/ke`（`KE_INSTALL_DIR` 可改）。设置 `KE_RELEASE_TAG=ke-v0.1.0` 可固定版本。更新就是再运行一次；`ke update` 会有意拒绝，并把这条命令打印出来。
+Windows（x86_64）：
 
-从源码安装请在仓库内运行 `scripts/ke-install.sh`（需要 Rust 与 `vendor/libghostty-vt/build.zig.zon` 里固定的 Zig 版本，herdr 0.9.1 对应 0.16.0）。不要用 `cargo install`：它会装出一个叫 `herdr` 的二进制。
+```powershell
+powershell -ExecutionPolicy Bypass -c "irm https://github.com/Little-Z7/ke/releases/latest/download/ke-install.ps1 | iex"
+```
+
+Unix 脚本装到 `~/.local/bin/ke`（`KE_INSTALL_DIR` 可改）。Windows 脚本装到 `%LOCALAPPDATA%\Programs\ke\ke.exe`，并带上 ConPTY 运行时、把该目录加入用户 PATH。两者都会按发布里的 `SHA256SUMS` 校验。设置 `KE_RELEASE_TAG=ke-v0.1.0` 可固定版本。更新就是再运行一次；`ke update` 会有意拒绝，并把对应平台的安装命令打印出来。
+
+Unix 上从源码安装请在仓库内运行 `scripts/ke-install.sh`（需要 Rust 与 `vendor/libghostty-vt/build.zig.zon` 里固定的 Zig 版本，herdr 0.9.1 对应 0.16.0）。Windows 请用上面的 zip 安装脚本，或 `cargo build --release` 再跑 `scripts/package_windows_conpty.ps1`，把 `herdr.exe` 装成 `ke.exe`。不要用 `cargo install`：它会装出一个叫 `herdr` 的二进制。
 
 ## 与 herdr 的隔离
 
@@ -46,7 +52,7 @@ curl -fsSL https://github.com/Little-Z7/ke/releases/latest/download/ke-install.s
 
 ### 处理进程协议
 
-处理进程监听一个 Unix socket。每次提交时壳建立连接，写入一行 JSON，再读回一行 JSON：
+处理进程监听本地 socket（Unix 域套接字，Windows 上是命名管道）。每次提交时壳建立连接，写入一行 JSON，再读回一行 JSON：
 
 ```json
 {"pane_id":"wA:p2","agent":"claude","text":"deploy with key sk-live-..."}
@@ -99,7 +105,7 @@ curl -fsSL https://github.com/Little-Z7/ke/releases/latest/download/ke-install.s
 
 ```toml
 [ke]
-# 输入栏处理进程的 Unix socket。设置后，处理进程失效会拦下发送。
+# 输入栏处理进程的本地 socket（Unix 域套接字 / Windows 命名管道）。设置后，处理进程失效会拦下发送。
 # 未设置：~/.workcat/ke/composer.sock 存在时使用它，否则文字原样直通。
 composer_socket = "~/.workcat/ke/composer.sock"
 # 协调进程写入的 panel.json。
@@ -115,6 +121,5 @@ panel_file = "~/.workcat/ke/panel.json"
 
 ## 限制
 
-- 处理进程需要 Unix socket，因此 Windows 上的输入栏没有处理进程，文字原样发送。壳的发布只构建 macOS 与 Linux。
 - 子命令帮助与报错信息里仍写作 `herdr`；请读作 `ke`。
 - 处理进程、协调进程和常驻模型都不属于壳。上面的协议就是全部契约。

@@ -6,8 +6,7 @@
 //! - Ordinary text goes through the redaction gate and is returned as `send` with a note when
 //!   something was replaced.
 //! - `@ke …` is the user talking to the resident: the message is logged to `chat.jsonl` and the
-//!   reply is `done`. Answering is asynchronous (the model half appends to the same log); in this
-//!   milestone the resident acknowledges and notes that no model is wired yet.
+//!   reply is `done` with a "思考中…" note. The model half answers asynchronously on the same log.
 //! - Anything malformed is `block`: the gate fails closed.
 
 use std::io::{BufRead, BufReader, Write};
@@ -16,12 +15,15 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use std::time::Duration;
 
+use interprocess::local_socket::traits::{Listener as _, Stream as _};
+use interprocess::local_socket::ListenerNonblockingMode;
+
+use crate::ipc::{self, LocalListener, LocalStream};
 use crate::ke::chat_log::{self, ChatEntry, ChatRole};
 use crate::ke::paths::ResidentPaths;
 use crate::ke::redact::{self, RedactRules};
 
 pub(crate) const KE_MENTION: &str = "@ke";
-const IO_TIMEOUT: Duration = Duration::from_millis(1500);
 const ACCEPT_POLL: Duration = Duration::from_millis(250);
 
 #[derive(Debug, Clone, PartialEq, Eq, serde::Deserialize)]
@@ -74,7 +76,7 @@ pub(crate) fn decide(
             };
         }
         return Decision::Done {
-            note: Some("管家收到，模型尚未接入".into()),
+            note: Some("思考中…".into()),
         };
     }
     let redaction = redact::redact(&request.text, rules);
@@ -85,11 +87,11 @@ pub(crate) fn decide(
 }
 
 pub(crate) struct Processor {
-    listener: std::os::unix::net::UnixListener,
+    listener: LocalListener,
     socket_path: PathBuf,
     chat_log: PathBuf,
     rules: RedactRules,
-    #[allow(dead_code)] // wired to the model half in the next milestone
+    #[allow(dead_code)] // roster lives on Shared for the answerer; processor keeps a clone
     shared: Arc<super::Shared>,
     stop: Arc<AtomicBool>,
 }
@@ -101,10 +103,11 @@ impl Processor {
         shared: Arc<super::Shared>,
         stop: Arc<AtomicBool>,
     ) -> std::io::Result<Self> {
-        // A previous resident that died without cleanup leaves a dead socket file behind.
-        let _ = std::fs::remove_file(&paths.composer_socket);
-        let listener = std::os::unix::net::UnixListener::bind(&paths.composer_socket)?;
-        listener.set_nonblocking(true)?;
+        ipc::prepare_socket_path(&paths.composer_socket, |path| {
+            format!("ke resident composer already running at {}", path.display())
+        })?;
+        let listener = ipc::bind_local_listener(&paths.composer_socket)?;
+        listener.set_nonblocking(ListenerNonblockingMode::Accept)?;
         Ok(Self {
             listener,
             socket_path: paths.composer_socket.clone(),
@@ -122,7 +125,7 @@ impl Processor {
                 return;
             }
             match self.listener.accept() {
-                Ok((stream, _)) => {
+                Ok(stream) => {
                     if let Err(err) = self.handle(stream) {
                         eprintln!("ke resident: composer request failed: {err}");
                     }
@@ -138,20 +141,16 @@ impl Processor {
         }
     }
 
-    fn handle(&self, stream: std::os::unix::net::UnixStream) -> std::io::Result<()> {
-        stream.set_nonblocking(false)?;
-        stream.set_read_timeout(Some(IO_TIMEOUT))?;
-        stream.set_write_timeout(Some(IO_TIMEOUT))?;
-        let mut reader = BufReader::new(stream.try_clone()?);
+    fn handle(&self, mut stream: LocalStream) -> std::io::Result<()> {
+        let _ = stream.set_nonblocking(false);
         let mut line = String::new();
-        reader.read_line(&mut line)?;
+        BufReader::new(&mut stream).read_line(&mut line)?;
         let decision = match serde_json::from_str::<ComposerRequest>(line.trim()) {
             Ok(request) => decide(&request, self.rules, &self.chat_log),
             Err(err) => Decision::Block {
                 note: format!("管家收到了看不懂的请求（{err}），未发送"),
             },
         };
-        let mut stream = stream;
         let mut reply = decision.to_json();
         reply.push('\n');
         stream.write_all(reply.as_bytes())
@@ -161,6 +160,8 @@ impl Processor {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::io::{BufRead, BufReader, Write};
+    use std::path::PathBuf;
 
     fn request(text: &str) -> ComposerRequest {
         ComposerRequest {
@@ -216,7 +217,13 @@ mod tests {
             RedactRules::default(),
             &log,
         );
-        assert!(matches!(decision, Decision::Done { .. }), "{decision:?}");
+        assert_eq!(
+            decision,
+            Decision::Done {
+                note: Some("思考中…".into()),
+            },
+            "{decision:?}"
+        );
         let entries = chat_log::read_tail(&log, 5).unwrap();
         assert_eq!(entries.len(), 1);
         assert_eq!(entries[0].role, ChatRole::User);
@@ -273,20 +280,20 @@ mod tests {
         let socket = paths.composer_socket.clone();
         let server = std::thread::spawn(move || processor.serve());
 
-        let mut stream = std::os::unix::net::UnixStream::connect(&socket).unwrap();
+        let mut stream = crate::ipc::connect_local_stream(&socket).unwrap();
         stream
             .write_all(b"{\"pane_id\":\"w1:p1\",\"agent\":null,\"text\":\"token ghp_abcdefghijklmnopqrstuvwxyz\"}\n")
             .unwrap();
         let mut reply = String::new();
-        BufReader::new(stream).read_line(&mut reply).unwrap();
+        BufReader::new(&mut stream).read_line(&mut reply).unwrap();
         let reply: serde_json::Value = serde_json::from_str(&reply).unwrap();
         assert_eq!(reply["action"], "send");
         assert_eq!(reply["text"], "token [REDACTED]");
 
-        let mut stream = std::os::unix::net::UnixStream::connect(&socket).unwrap();
+        let mut stream = crate::ipc::connect_local_stream(&socket).unwrap();
         stream.write_all(b"this is not json\n").unwrap();
         let mut reply = String::new();
-        BufReader::new(stream).read_line(&mut reply).unwrap();
+        BufReader::new(&mut stream).read_line(&mut reply).unwrap();
         let reply: serde_json::Value = serde_json::from_str(&reply).unwrap();
         assert_eq!(reply["action"], "block", "malformed requests fail closed");
 

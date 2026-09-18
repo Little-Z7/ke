@@ -253,6 +253,7 @@ mod endpoints;
 mod graphics;
 #[path = "input.rs"]
 mod input_domain;
+mod ke_chat; // Modified by ke
 mod keybindings_settings;
 mod link_hover;
 mod mobile;

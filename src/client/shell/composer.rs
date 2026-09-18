@@ -1,16 +1,18 @@
-//! Modified by ke: native composer bar (壳输入栏).
+//! Modified by ke: native composer dock (壳输入栏).
 //!
-//! While the composer is open, typed and pasted text goes into a bar under the pane surface instead of the
-//! focused pane. On Enter the text is handed to a local processor (redaction or a resident model) over a Unix
-//! socket, then submitted to the focused pane with `agent.prompt` (agent panes) or `pane.send_input` (others).
-//! Without a configured processor the text is sent unchanged; if a processor is configured but fails, the text
-//! stays in the bar and nothing is sent. With an empty bar, Enter / Esc / Backspace still reach the pane so the
-//! agent's own prompts and interrupts keep working.
+//! The two-row bar is always on screen under the pane surface. Keys go to the focused pane until
+//! the dock is focused (click it, or prefix+i). `/ke` commands run locally; `//…` drops one `/`
+//! and goes to the pane. `@ke` replies expand a transcript above the input; click the header or Esc
+//! to collapse it. On Enter other text is handed to a local processor over a local socket, then
+//! submitted with `agent.prompt` or `pane.send_input`. With an empty unfocused bar, Enter / Esc /
+//! Backspace still reach the pane.
 
 use super::*;
+use crossterm::event::{MouseButton, MouseEventKind};
 
 pub(super) const COMPOSER_ROWS: u16 = 2;
-const HOOK_TIMEOUT: std::time::Duration = std::time::Duration::from_millis(1500);
+/// Extra rows for an expanded `@ke` transcript sitting above the input.
+pub(super) const CHAT_ROWS: u16 = 8;
 /// Replies faster than this finish inside the key handler; slower ones complete from the timer.
 const SYNC_WAIT: std::time::Duration = std::time::Duration::from_millis(30);
 /// A processor that has not answered by now is treated as a block.
@@ -20,6 +22,10 @@ pub(super) const PENDING_LIMIT: std::time::Duration = std::time::Duration::from_
 pub(super) struct ClientComposer {
     pub(super) input: String,
     pub(super) notice: Option<String>,
+    /// When false the bar is still drawn, but keys go to the focused pane.
+    pub(super) focused: bool,
+    pub(super) chat: Option<super::ke_chat::ClientKeChatOverlay>,
+    pub(super) chat_expanded: bool,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -75,15 +81,12 @@ pub(super) fn call_composer_hook(request: &ComposerRequest<'_>) -> ComposerReply
     }
 }
 
-#[cfg(unix)]
 fn exchange(
     path: &std::path::Path,
     request: &ComposerRequest<'_>,
 ) -> std::io::Result<ComposerReply> {
     use std::io::{BufRead, Write};
-    let mut stream = std::os::unix::net::UnixStream::connect(path)?;
-    stream.set_read_timeout(Some(HOOK_TIMEOUT))?;
-    stream.set_write_timeout(Some(HOOK_TIMEOUT))?;
+    let mut stream = crate::ipc::connect_local_stream(path)?;
     let mut line = serde_json::json!({
         "pane_id": request.pane_id,
         "agent": request.agent,
@@ -93,19 +96,8 @@ fn exchange(
     line.push('\n');
     stream.write_all(line.as_bytes())?;
     let mut reply = String::new();
-    std::io::BufReader::new(stream).read_line(&mut reply)?;
+    std::io::BufReader::new(&mut stream).read_line(&mut reply)?;
     Ok(parse_reply(&reply, request.text))
-}
-
-#[cfg(not(unix))]
-fn exchange(
-    _path: &std::path::Path,
-    _request: &ComposerRequest<'_>,
-) -> std::io::Result<ComposerReply> {
-    Err(std::io::Error::new(
-        std::io::ErrorKind::Unsupported,
-        "the composer processor needs a unix socket",
-    ))
 }
 
 pub(super) fn parse_reply(line: &str, original: &str) -> ComposerReply {
@@ -136,7 +128,9 @@ pub(super) fn parse_reply(line: &str, original: &str) -> ComposerReply {
 
 impl ClientShellState {
     pub(super) fn composer_accepts_text(&self) -> bool {
-        self.composer.is_some()
+        self.composer
+            .as_ref()
+            .is_some_and(|composer| composer.focused)
             && self.overlay.is_none()
             && self.mode == ClientShellMode::Terminal
             && self.popup_terminal_id.is_none()
@@ -144,10 +138,17 @@ impl ClientShellState {
             && self.focused_pane_id().is_some()
     }
 
+    pub(super) fn composer_reserved_rows(&self) -> u16 {
+        let Some(composer) = self.composer.as_ref() else {
+            return 0;
+        };
+        COMPOSER_ROWS.saturating_add(if composer.chat_expanded { CHAT_ROWS } else { 0 })
+    }
+
+    /// Prefix+i focuses or unfocuses the dock. The bar itself stays on screen.
     pub(super) fn toggle_composer(&mut self, outcome: &mut ClientShellInput) {
-        if self.composer.take().is_none() {
-            self.composer = Some(ClientComposer::default());
-        }
+        let composer = self.composer.get_or_insert_with(ClientComposer::default);
+        composer.focused = !composer.focused;
         outcome.repaint = true;
         outcome.resize = true;
     }
@@ -155,15 +156,32 @@ impl ClientShellState {
     /// Opens the bar if needed and replaces its text (coordinator panel click). The text is not
     /// sent: the user still reviews it and presses Enter, so it goes through the processor as usual.
     pub(super) fn composer_open_with(&mut self, text: &str, outcome: &mut ClientShellInput) {
-        if self.composer.is_none() {
-            self.toggle_composer(outcome);
-        }
-        if let Some(composer) = self.composer.as_mut() {
-            composer.input.clear();
-            composer.notice = None;
-        }
+        let composer = self.composer.get_or_insert_with(ClientComposer::default);
+        composer.focused = true;
+        composer.input.clear();
+        composer.notice = None;
         self.composer_insert(text);
         outcome.repaint = true;
+    }
+
+    pub(super) fn set_composer_chat(&mut self, chat: super::ke_chat::ClientKeChatOverlay) -> bool {
+        let composer = self.composer.get_or_insert_with(ClientComposer::default);
+        let same = composer.chat.as_ref() == Some(&chat) && composer.chat_expanded;
+        composer.chat = Some(chat);
+        composer.chat_expanded = true;
+        !same
+    }
+
+    pub(super) fn toggle_composer_chat(&mut self, outcome: &mut ClientShellInput) {
+        let Some(composer) = self.composer.as_mut() else {
+            return;
+        };
+        if composer.chat.is_none() {
+            return;
+        }
+        composer.chat_expanded = !composer.chat_expanded;
+        outcome.repaint = true;
+        outcome.resize = true;
     }
 
     pub(super) fn composer_insert(&mut self, text: &str) {
@@ -212,6 +230,28 @@ impl ClientShellState {
                 }
                 outcome.repaint = true;
                 true
+            }
+            KeyCode::Esc => {
+                if self
+                    .composer
+                    .as_ref()
+                    .is_some_and(|composer| composer.chat_expanded)
+                {
+                    self.toggle_composer_chat(outcome);
+                    true
+                } else if self
+                    .composer
+                    .as_ref()
+                    .is_some_and(|composer| composer.focused)
+                {
+                    if let Some(composer) = self.composer.as_mut() {
+                        composer.focused = false;
+                    }
+                    outcome.repaint = true;
+                    true
+                } else {
+                    false
+                }
             }
             KeyCode::Backspace if !empty => {
                 if let Some(composer) = self.composer.as_mut() {
@@ -276,10 +316,7 @@ impl ClientShellState {
             outcome.repaint = true;
             return;
         }
-        let Some((pane_id, agent)) = self.composer_target() else {
-            return;
-        };
-        let Some(text) = self
+        let Some(original) = self
             .composer
             .as_ref()
             .map(|composer| composer.input.trim().to_owned())
@@ -287,6 +324,16 @@ impl ClientShellState {
         else {
             return;
         };
+        if let Some(command) = crate::ke::slash::parse_ke_command(&original) {
+            self.run_ke_slash(command, outcome);
+            return;
+        }
+        let Some((pane_id, agent)) = self.composer_target() else {
+            return;
+        };
+        let text = crate::ke::slash::passthrough_after_slash_escape(&original)
+            .map(str::to_owned)
+            .unwrap_or_else(|| original.clone());
         // The processor runs off the input path: a fast reply finishes here, a slow one is picked up
         // by `tick_composer` from the main-loop timer, so the UI never blocks on the socket.
         let hook = self.composer_hook;
@@ -304,13 +351,13 @@ impl ClientShellState {
             }));
         });
         match rx.recv_timeout(SYNC_WAIT) {
-            Ok(reply) => self.finish_composer_submit(pane_id, agent, &text, reply, outcome),
+            Ok(reply) => self.finish_composer_submit(pane_id, agent, &original, reply, outcome),
             Err(_) => {
                 self.composer_pending = Some(ComposerPending {
                     rx,
                     pane_id,
                     agent,
-                    text,
+                    text: original,
                     started: std::time::Instant::now(),
                 });
                 if let Some(composer) = self.composer.as_mut() {
@@ -425,6 +472,74 @@ impl ClientShellState {
             )
         })
     }
+
+    pub(super) fn handle_composer_mouse(
+        &mut self,
+        mouse: crossterm::event::MouseEvent,
+        outcome: &mut ClientShellInput,
+    ) -> bool {
+        if self.overlay.is_some() {
+            return false;
+        }
+        let point = (mouse.column, mouse.row);
+        match mouse.kind {
+            MouseEventKind::Down(MouseButton::Left)
+                if super::contains(self.hits.composer_toggle, point) =>
+            {
+                self.toggle_composer_chat(outcome);
+                if let Some(composer) = self.composer.as_mut() {
+                    composer.focused = true;
+                }
+                true
+            }
+            MouseEventKind::Down(MouseButton::Left)
+                if super::contains(self.hits.composer_input, point)
+                    || super::contains(self.hits.composer_chat, point) =>
+            {
+                if let Some(composer) = self.composer.as_mut() {
+                    composer.focused = true;
+                }
+                outcome.repaint = true;
+                true
+            }
+            MouseEventKind::ScrollUp if super::contains(self.hits.composer_chat, point) => {
+                self.scroll_composer_chat(-3);
+                outcome.repaint = true;
+                true
+            }
+            MouseEventKind::ScrollDown if super::contains(self.hits.composer_chat, point) => {
+                self.scroll_composer_chat(3);
+                outcome.repaint = true;
+                true
+            }
+            _ => false,
+        }
+    }
+
+    fn scroll_composer_chat(&mut self, delta: isize) {
+        let max_scroll = self.hits.ke_chat_max_scroll;
+        if let Some(chat) = self
+            .composer
+            .as_mut()
+            .and_then(|composer| composer.chat.as_mut())
+        {
+            chat.scroll = if delta.is_negative() {
+                chat.scroll.saturating_sub(delta.unsigned_abs())
+            } else {
+                chat.scroll.saturating_add(delta.unsigned_abs())
+            }
+            .min(max_scroll);
+        }
+    }
+}
+
+#[derive(Default)]
+pub(super) struct ComposerRender {
+    pub cursor: Option<crate::protocol::CursorState>,
+    pub input: Rect,
+    pub toggle: Rect,
+    pub chat: Rect,
+    pub max_scroll: usize,
 }
 
 pub(super) fn render_composer(
@@ -433,44 +548,109 @@ pub(super) fn render_composer(
     composer: &ClientComposer,
     target: &str,
     palette: &Palette,
-) -> Option<crate::protocol::CursorState> {
+) -> ComposerRender {
+    let mut rendered = ComposerRender::default();
     if area.height == 0 || area.width < 8 {
-        return None;
+        return rendered;
     }
     let status_style = Style::default().fg(palette.subtext0).bg(palette.panel_bg);
-    buffer.set_style(Rect::new(area.x, area.y, area.width, 1), status_style);
-    let status = match composer.notice.as_deref() {
-        Some(note) => format!(" 壳 · {target} · {note}"),
-        None => format!(" 壳 · {target} · Enter 发送 · Esc 清空"),
+    let input_style = Style::default().fg(palette.text).bg(palette.surface0);
+    let chat_style = Style::default().fg(palette.text).bg(palette.panel_bg);
+    let header_style = Style::default()
+        .fg(palette.accent)
+        .bg(palette.panel_bg)
+        .add_modifier(Modifier::BOLD);
+
+    let input_y = area.y + area.height.saturating_sub(1);
+    rendered.input = Rect::new(area.x, input_y, area.width, 1);
+    let status_y = if area.height >= 2 {
+        input_y.saturating_sub(1)
+    } else {
+        area.y
     };
+
+    if composer.chat_expanded {
+        if let Some(chat) = composer.chat.as_ref() {
+            let header = Rect::new(area.x, area.y, area.width, 1);
+            rendered.toggle = header;
+            buffer.set_style(header, status_style);
+            buffer.set_stringn(
+                header.x,
+                header.y,
+                " 管家 · 点此收起 · 滚轮翻阅",
+                usize::from(header.width),
+                header_style,
+            );
+            let body_height = status_y.saturating_sub(area.y.saturating_add(1));
+            if body_height > 0 {
+                let body = Rect::new(area.x, area.y.saturating_add(1), area.width, body_height);
+                rendered.chat = body;
+                buffer.set_style(body, chat_style);
+                let lines: Vec<&str> = chat.body.lines().collect();
+                rendered.max_scroll = lines.len().saturating_sub(usize::from(body.height));
+                let start = chat.scroll.min(rendered.max_scroll);
+                for (index, line) in lines.into_iter().skip(start).enumerate() {
+                    let y = body.y.saturating_add(index as u16);
+                    if y >= body.bottom() {
+                        break;
+                    }
+                    buffer.set_stringn(
+                        body.x,
+                        y,
+                        format!(" {line}"),
+                        usize::from(body.width),
+                        chat_style,
+                    );
+                }
+            }
+        }
+    } else if composer.chat.is_some() {
+        rendered.toggle = Rect::new(area.x, status_y, area.width, 1);
+    }
+
+    let status = if !composer.focused {
+        if composer.chat.is_some() && !composer.chat_expanded {
+            format!(" 壳 · {target} · 点此输入 · 点标题展开管家")
+        } else {
+            format!(" 壳 · {target} · 点此或 Ctrl+B i 输入")
+        }
+    } else if let Some(note) = composer.notice.as_deref() {
+        format!(" 壳 · {target} · {note}")
+    } else if composer.chat.is_some() && !composer.chat_expanded {
+        format!(" 壳 · {target} · Enter 发送 · 点标题展开管家")
+    } else {
+        format!(" 壳 · {target} · Enter 发送 · Esc 收起")
+    };
+    buffer.set_style(Rect::new(area.x, status_y, area.width, 1), status_style);
     buffer.set_stringn(
         area.x,
-        area.y,
+        status_y,
         &status,
         usize::from(area.width),
         status_style,
     );
-    if area.height < 2 {
-        return None;
-    }
-    let input_y = area.y + area.height - 1;
-    let input_style = Style::default().fg(palette.text).bg(palette.surface0);
-    buffer.set_style(Rect::new(area.x, input_y, area.width, 1), input_style);
-    let prompt = " › ";
+
+    buffer.set_style(rendered.input, input_style);
+    let prompt = if composer.focused { " › " } else { "   " };
     let prompt_width = u16::try_from(UnicodeWidthStr::width(prompt)).unwrap_or(u16::MAX);
     let available = usize::from(area.width.saturating_sub(prompt_width).saturating_sub(1));
     let line = format!("{prompt}{}", fitting_tail(&composer.input, available));
     buffer.set_stringn(area.x, input_y, &line, usize::from(area.width), input_style);
-    let x = area
-        .x
-        .saturating_add(u16::try_from(UnicodeWidthStr::width(line.as_str())).unwrap_or(u16::MAX))
-        .min(area.right().saturating_sub(1));
-    Some(crate::protocol::CursorState {
-        x,
-        y: input_y,
-        visible: true,
-        shape: 0,
-    })
+    if composer.focused {
+        let x = area
+            .x
+            .saturating_add(
+                u16::try_from(UnicodeWidthStr::width(line.as_str())).unwrap_or(u16::MAX),
+            )
+            .min(area.right().saturating_sub(1));
+        rendered.cursor = Some(crate::protocol::CursorState {
+            x,
+            y: input_y,
+            visible: true,
+            shape: 0,
+        });
+    }
+    rendered
 }
 
 fn fitting_tail(text: &str, width: usize) -> &str {

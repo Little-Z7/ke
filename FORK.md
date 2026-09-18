@@ -15,10 +15,16 @@ macOS 与 Linux（x86_64 / aarch64）：
 curl -fsSL https://github.com/Little-Z7/ke/releases/latest/download/ke-install.sh | sh
 ```
 
-- 装到 `~/.local/bin/ke`（`KE_INSTALL_DIR` 可改），下载后按发布里的 `SHA256SUMS` 校验。`KE_RELEASE_TAG=ke-v0.1.0` 可指定版本。更新就是重新运行一次。
+Windows（x86_64）：
+
+```
+powershell -ExecutionPolicy Bypass -c "irm https://github.com/Little-Z7/ke/releases/latest/download/ke-install.ps1 | iex"
+```
+
+- Unix 装到 `~/.local/bin/ke`（`KE_INSTALL_DIR` 可改），Windows 装到 `%LOCALAPPDATA%\Programs\ke\ke.exe`（含 ConPTY）。下载后按发布里的 `SHA256SUMS` 校验。`KE_RELEASE_TAG=ke-v0.1.0` 可指定版本。更新就是重新运行一次。
 - 壳不自带 agent 状态钩子的安装：它复用上游 herdr 为各 CLI 装好的钩子（钩子按窗格里的 `HERDR_SOCKET_PATH` 找 socket，在壳的窗格里就会连到壳）。需要钩子的话先装上游 herdr 并执行 `herdr integration install <agent>`；没有钩子时壳退回到基于屏幕内容的状态检测。
 - 输入栏的本机处理进程（脱敏等）和侧栏面板的协调进程不在本仓库里。没有它们时输入栏原文直通，侧栏 ke 面板不显示。两者的路径默认在 `~/.workcat/ke/` 下，可用 `config.toml` 的 `[ke]` 段（`composer_socket`、`panel_file`）或环境变量（`KE_COMPOSER_SOCKET`、`KE_PANEL_FILE` / `WORKCAT_KE_HOME`）修改。协议与用法见 `docs/next/website/src/content/docs/ke.mdx`（中文版 `zh-cn/ke.mdx`）。
-- 从源码安装：`scripts/ke-install.sh`（需要 Rust 与 `vendor/libghostty-vt/build.zig.zon` 里 `minimum_zig_version` 指定的 Zig，herdr 0.9.1 起为 0.16.0）。
+- 从源码安装：Unix 用 `scripts/ke-install.sh`（需要 Rust 与 `vendor/libghostty-vt/build.zig.zon` 里 `minimum_zig_version` 指定的 Zig，herdr 0.9.1 起为 0.16.0）。Windows 用上面的 `ke-install.ps1`，或 `cargo build --release` 再跑 `scripts/package_windows_conpty.ps1`。
 
 ## 发布
 
@@ -28,7 +34,7 @@ curl -fsSL https://github.com/Little-Z7/ke/releases/latest/download/ke-install.s
 git tag ke-v<KE_VERSION> && git push origin ke/main ke-v<KE_VERSION>
 ```
 
-`.github/workflows/ke-release.yml` 会校验标签与 `KE_VERSION` 一致，构建四个平台的二进制，连同 `ke-install.sh`、`SHA256SUMS`、`LICENSE` 发到 GitHub Release。上游自带的 workflow 只在 `master` 分支和 `v*` 标签上动作，所以壳用 `ke/main` 分支和 `ke-v*` 标签，不要推 `master` 分支或 `v*` 标签到壳的仓库。
+`.github/workflows/ke-release.yml` 会校验标签与 `KE_VERSION` 一致，构建五个平台的二进制（含 Windows zip + ConPTY），连同 `ke-install.sh`、`ke-install.ps1`、`SHA256SUMS`、`LICENSE` 发到 GitHub Release。上游自带的 workflow 只在 `master` 分支和 `v*` 标签上动作，所以壳用 `ke/main` 分支和 `ke-v*` 标签，不要推 `master` 分支或 `v*` 标签到壳的仓库。
 
 ## 相对上游的修改
 
@@ -90,6 +96,20 @@ git tag ke-v<KE_VERSION> && git push origin ke/main ke-v<KE_VERSION>
 | 2026-09-17 | scripts/ke-install.sh | Zig 回退路径按 `build.zig.zon` 的 `minimum_zig_version` 优先挑对应版本（herdr 0.9.1 起需要 Zig 0.16.0） |
 | 2026-09-17 | .github/workflows/ke-release.yml | 与上游 release.yml 一致改用 `vercel-labs/setup-zig` 安装 Zig 0.16.0（含 macOS，去掉 Homebrew zig@0.15 变通） |
 | 2026-09-17 | tests/machine_api.rs、tests/session_delete.rs | 上游 v0.9.1 新增的测试里应用目录名 herdr-dev → ke-dev（同 2026-09-13 对 tests/*.rs 的处理） |
+| 2026-09-18 | src/ke/{mod,paths,redact,chat_log}.rs、src/ke/resident/{mod,panel,processor,supervisor}.rs（新增） | 管家 M1：`ke resident`、会话 `resident/` 目录、规则脱敏、composer 处理进程、确定性面板、服务端守护 |
+| 2026-09-18 | src/cli.rs、src/cli/spec.rs、src/main.rs、src/server/headless/bootstrap.rs、src/app/mod.rs、src/config/model.rs、docs/next/website/src/data/config-reference.json | 管家 M1 挂钩：`resident` 子命令、`[ke.model]`/`[ke.redact]`、服务端随配置 spawn |
+| 2026-09-18 | src/ke/resident/{model,snapshot,prompt,answer}.rs、src/ke/defaults/resident.md（新增） | 管家 M2：OpenAI 兼容 curl/SSE、窗格快照、角色宪法、`@ke` 异步回答写入 chat.jsonl |
+| 2026-09-18 | src/ke/resident/mod.rs、src/ke/resident/processor.rs、src/config/model.rs、src/config.rs | 管家 M2：answerer 线程；`@ke` done note「思考中…」；`resolved_profile` 默认本机 Ollama |
+| 2026-09-18 | src/client/shell/ke_chat.rs、src/client/shell/tests/ke_chat.rs（新增） | 管家 M2：客户端按 mtime 轮询 chat.jsonl，新 assistant 弹可滚动浮层（启动不刷历史） |
+| 2026-09-18 | src/client/shell.rs、state.rs、overlays.rs、overlay_input.rs、composition.rs、mouse.rs、input.rs、config.rs、src/client/mod.rs、src/client/shell/tests/{mod,graphics}.rs | 管家 M2：接入 KeChat overlay（Esc/Enter/点击关闭，滚轮与方向键滚动；不改 protocol） |
+| 2026-09-18 | src/config/model.rs、src/ke/chat_log.rs | `KeConfig::chat_log_path()`；`read_tail` 供客户端使用 |
+| 2026-09-18 | src/ke/slash.rs、src/client/shell/ke_cmd.rs（新增） | 管家 M3：`/ke` 命令（help/status/log/model/provider/prompt/memory）与 `//` 逃逸，客户端本地执行 |
+| 2026-09-18 | src/client/shell/composer.rs、src/client/shell/ke_chat.rs、src/client/shell.rs、src/ke/mod.rs | 管家 M3：提交路径拦截 `/ke` 与 `//`；`/ke log` 展开底栏记录 |
+| 2026-09-18 | src/input/keybindings.rs、src/config/keybinds.rs、src/config/model.rs、src/input/keybind_help.rs、src/client/shell/actions.rs、src/main.rs、docs/next/website/src/data/config-reference.json | 管家 M3：`keys.ke_chat`（默认 prefix+shift+i）预填 `@ke ` |
+| 2026-09-18 | src/client/shell/tests/composer_bar.rs | 管家 M3：`/ke help`、`//` 逃逸、其它斜杠命令仍进窗格、ke_chat 快捷键 |
+| 2026-09-18 | src/ke/resident/processor.rs、src/client/shell/composer.rs、src/ke/resident/supervisor.rs、src/ke/resident/mod.rs | Windows：composer/resident 改走 `ipc::` 本地 socket（命名管道）；去掉 unix-only 门；面板原子写兼容 Windows rename |
+| 2026-09-18 | .github/workflows/ke-release.yml、distribution/ke-install.ps1（新增）、src/build_info.rs | Windows 发布 `ke-windows-x86_64.zip`（含 ConPTY）；PowerShell 安装脚本；`KE_INSTALL_COMMAND` 按平台切换 |
+| 2026-09-18 | docs/next/.../ke.mdx（en/zh-cn/ja）、FORK.md、README.md、config-reference.json | 文档与安装说明补 Windows |
 
 ## 同步上游
 

@@ -739,6 +739,28 @@ impl ClientShellState {
             }
             return;
         }
+        // Modified by ke: close button + wheel only; v1 has no scrollbar drag.
+        if matches!(self.overlay, Some(ClientShellOverlay::KeChat(_))) {
+            match mouse.kind {
+                MouseEventKind::Down(MouseButton::Left)
+                    if super::contains(self.hits.overlay_primary, point) =>
+                {
+                    self.overlay = None;
+                    self.chrome_drag = None;
+                    outcome.repaint = true;
+                }
+                MouseEventKind::ScrollUp => {
+                    self.scroll_ke_chat(-3);
+                    outcome.repaint = true;
+                }
+                MouseEventKind::ScrollDown => {
+                    self.scroll_ke_chat(3);
+                    outcome.repaint = true;
+                }
+                _ => {}
+            }
+            return;
+        }
         if matches!(self.overlay, Some(ClientShellOverlay::ReleaseNotes(_))) {
             let (close, track, metrics) = self
                 .current_release_notes_input_geometry()
@@ -1649,6 +1671,9 @@ impl ClientShellState {
                 }
                 _ => {}
             }
+            return;
+        }
+        if self.handle_composer_mouse(mouse, outcome) {
             return;
         }
         if self.overlay.is_some() {
