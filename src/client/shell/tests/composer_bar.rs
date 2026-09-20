@@ -142,6 +142,23 @@ fn typed_text_goes_to_the_composer_not_the_pane() {
 }
 
 #[test]
+fn prefix_key_still_works_while_the_composer_is_focused() {
+    let mut state = state_with_composer(None, fake_send);
+    assert_eq!(state.mode, ClientShellMode::Terminal);
+    assert!(state.composer.as_ref().is_some_and(|composer| composer.focused));
+    state.handle_raw_events(vec![RawInputEvent::Key(crate::input::TerminalKey::new(
+        crossterm::event::KeyCode::Char('b'),
+        crossterm::event::KeyModifiers::CONTROL,
+    ))]);
+    assert_eq!(state.mode, ClientShellMode::Prefix);
+    assert_eq!(
+        state.composer.as_ref().map(|composer| composer.input.as_str()),
+        Some(""),
+        "Ctrl+B must not become a composer cursor-left"
+    );
+}
+
+#[test]
 fn enter_submits_processed_text_to_an_agent_pane_with_agent_prompt() {
     let mut state = state_with_composer(Some("claude"), fake_send);
     state.handle_input_bytes(b"hi");

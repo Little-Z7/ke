@@ -260,6 +260,11 @@ impl ClientShellState {
         {
             return false;
         }
+        // Prefix (default Ctrl+B) must enter prefix mode even while the dock is focused.
+        // TextEditor otherwise treats Ctrl+B as "move left", so detach/help look dead.
+        if crate::config::terminal_key_matches_combo(key, self.config.keybinds.prefix) {
+            return false;
+        }
         let empty = self
             .composer
             .as_ref()

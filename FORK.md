@@ -120,6 +120,7 @@ git tag ke-v<KE_VERSION> && git push origin ke/main ke-v<KE_VERSION>
 | 2026-09-18 | src/client/shell/composer.rs、mouse.rs、preferences.rs | 右侧壳栏可拖左侧 `│` 改宽，双击恢复 32 列，宽度写入 client-shell 偏好 |
 | 2026-09-18 | src/client/shell/settings.rs、ke_model.rs、global_menu.rs | 模型配置并入 Settings 的 model 分页；`/ke model` 与全局菜单 model 打开同一套表单 |
 | 2026-09-18 | src/build_info.rs | 发布 ke-v0.3.2：Settings 模型页与可拖宽壳栏 |
+| 2026-09-20 | src/client/shell/composer.rs | 壳栏聚焦时 Ctrl+B 不再当光标左移，留给前缀键 |
 
 ## 同步上游
 
