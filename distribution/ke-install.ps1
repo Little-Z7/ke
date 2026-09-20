@@ -46,7 +46,7 @@ try {
     Write-Step "fetching checksums..."
     $sumsPath = Join-Path $Tmp "SHA256SUMS"
     try {
-        Invoke-WebRequest -Uri "$Base/SHA256SUMS" -OutFile $sumsPath -UseBasicParsing
+        Invoke-WebRequest -Uri "$Base/SHA256SUMS" -OutFile $sumsPath -UseBasicParsing -TimeoutSec 30
     } catch {
         Fail "can't fetch $Base/SHA256SUMS"
     }
@@ -63,12 +63,16 @@ try {
         Fail "this release has no binary for windows/x86_64"
     }
 
-    Write-Step "downloading $Asset..."
+    # ~10MB with no progress output (ProgressPreference stays SilentlyContinue because the
+    # PowerShell progress bar makes Invoke-WebRequest dramatically slower), so say up front that a
+    # quiet stretch here is expected rather than a hang. TimeoutSec guards the connect/response
+    # phase; it does not cut off a slow but progressing body transfer.
+    Write-Step "downloading $Asset... (no progress output; this can take a few minutes)"
     $zipPath = Join-Path $Tmp $Asset
     try {
-        Invoke-WebRequest -Uri "$Base/$Asset" -OutFile $zipPath -UseBasicParsing
+        Invoke-WebRequest -Uri "$Base/$Asset" -OutFile $zipPath -UseBasicParsing -TimeoutSec 30
     } catch {
-        Fail "download failed from $Base/$Asset"
+        Fail "download failed from $Base/$Asset - retry, or set KE_DOWNLOAD_BASE to a mirror"
     }
 
     $actual = (Get-FileHash -LiteralPath $zipPath -Algorithm SHA256).Hash.ToLowerInvariant()

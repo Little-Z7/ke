@@ -78,8 +78,19 @@ main() {
     fi
 
     log "downloading ${ASSET}..."
-    if ! curl -fsSL --retry 3 --connect-timeout 10 --max-time 300 "${BASE}/${ASSET}" -o "${TMP}/${BIN}"; then
-        err "download failed from ${BASE}/${ASSET}"
+    # Show a progress bar on a terminal so a slow link looks different from a hang, and stay quiet
+    # when the output is piped or logged.
+    if [ -t 2 ]; then
+        PROGRESS="--progress-bar"
+    else
+        PROGRESS="--silent"
+    fi
+    # No --max-time here: the binary is ~26MB and a slow-but-working link is legitimate, so a fixed
+    # deadline just fails honest downloads. Give up on a stall instead — under 4KB/s for 30s.
+    # shellcheck disable=SC2086 # PROGRESS is one deliberate flag, not a path
+    if ! curl -fSL $PROGRESS --retry 3 --connect-timeout 10 --speed-limit 4096 --speed-time 30 \
+        "${BASE}/${ASSET}" -o "${TMP}/${BIN}"; then
+        err "download failed from ${BASE}/${ASSET} — retry, or set KE_DOWNLOAD_BASE to a mirror"
     fi
 
     case "$SHA256_TOOL" in
