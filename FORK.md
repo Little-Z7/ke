@@ -121,6 +121,7 @@ git tag ke-v<KE_VERSION> && git push origin ke/main ke-v<KE_VERSION>
 | 2026-09-18 | src/client/shell/settings.rs、ke_model.rs、global_menu.rs | 模型配置并入 Settings 的 model 分页；`/ke model` 与全局菜单 model 打开同一套表单 |
 | 2026-09-18 | src/build_info.rs | 发布 ke-v0.3.2：Settings 模型页与可拖宽壳栏 |
 | 2026-09-20 | src/client/shell/composer.rs | 壳栏聚焦时 Ctrl+B 不再当光标左移，留给前缀键 |
+| 2026-09-20 | CLAUDE.md | 由指向 AGENTS.md 的符号链接改为壳自己的文件：壳的定位、命令、ke 层结构、fork 纪律与发布流程；上游规则仍指向未改动的 AGENTS.md |
 
 ## 同步上游
 
