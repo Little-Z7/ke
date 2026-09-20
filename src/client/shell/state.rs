@@ -401,6 +401,8 @@ pub(super) enum ClientSettingsSection {
     Toast,
     Integrations,
     KeModel,
+    /// Modified by ke: `[ke.redact]` toggles.
+    KeRedact,
 }
 
 impl ClientSettingsSection {
@@ -411,6 +413,7 @@ impl ClientSettingsSection {
         Self::Toast,
         Self::Integrations,
         Self::KeModel,
+        Self::KeRedact,
     ];
 
     pub(super) fn label(self) -> &'static str {
@@ -421,6 +424,7 @@ impl ClientSettingsSection {
             Self::Toast => "toasts",
             Self::Integrations => "integrations",
             Self::KeModel => "model",
+            Self::KeRedact => "redact",
         }
     }
 }
@@ -437,6 +441,8 @@ pub(super) struct ClientSettingsOverlay {
     pub(super) installing_integrations: bool,
     /// Modified by ke: `[ke.model]` form shown on the settings "model" tab.
     pub(super) ke_model: super::ke_model::ClientKeModelOverlay,
+    /// Modified by ke: `[ke.redact]` form shown on the settings "redact" tab.
+    pub(super) ke_redact: super::ke_redact::ClientKeRedactOverlay,
 }
 
 #[derive(Debug)]

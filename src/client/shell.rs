@@ -42,6 +42,7 @@ mod ke_chat;
 mod ke_cmd;
 mod ke_model;
 mod ke_panel;
+mod ke_redact;
 use text_editor::TextEditor;
 use word_selection::ClientWordSelection;
 

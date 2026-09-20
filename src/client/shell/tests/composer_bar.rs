@@ -573,6 +573,178 @@ fn settings_includes_the_model_tab() {
     );
 }
 
+/// Modified by ke: `settings_choice_count()` for the model tab must track the provider's
+/// `visible_fields()` instead of a hardcoded constant, or ↑↓ could select a row nothing is drawn
+/// on. Exercises the real key-routed toggle (not a direct field mutation) so it also proves the
+/// rendered row count agrees with the field list at every step.
+#[test]
+fn ke_model_provider_toggle_changes_the_rendered_row_count() {
+    let mut state = ClientShellState::new(ClientShellConfig::from_config(&Config::default()));
+    state.set_snapshot(Box::new(snapshot()));
+    state.set_pane_surface(surface());
+    state.open_settings_overlay();
+    let mut out = ClientShellInput::default();
+    state.select_settings_section(ClientSettingsSection::KeModel, &mut out);
+    state.compose(106, 40).expect("settings model tab");
+    assert_eq!(
+        state.hits.settings_choices.len(),
+        10,
+        "openai provider shows access template / endpoint / model / key / thinking / max tokens"
+    );
+
+    // Navigate up from the default (access template) to the provider row, then toggle it.
+    assert!(state.route_settings_key(
+        &crate::input::TerminalKey::new(
+            crossterm::event::KeyCode::Up,
+            crossterm::event::KeyModifiers::NONE
+        ),
+        &mut out
+    ));
+    assert!(state.route_settings_key(
+        &crate::input::TerminalKey::new(
+            crossterm::event::KeyCode::Right,
+            crossterm::event::KeyModifiers::NONE
+        ),
+        &mut out
+    ));
+    let Some(ClientShellOverlay::Settings(settings)) = state.overlay.as_ref() else {
+        panic!("model settings");
+    };
+    assert!(!settings.ke_model.is_openai());
+    assert_eq!(settings.ke_model.visible_fields().len(), 5);
+    assert!(
+        settings.ke_model.field < 5,
+        "selection must not point past the shrunk field list"
+    );
+    assert!(settings.selected < 5);
+
+    state.compose(106, 40).expect("settings model tab after toggle");
+    assert_eq!(
+        state.hits.settings_choices.len(),
+        5,
+        "cli provider hides the openai-only fields (only enabled/provider/name/command/panel model remain)"
+    );
+    assert!(
+        state
+            .hits
+            .settings_choices
+            .iter()
+            .all(|(_, index)| *index < 5),
+        "no rendered row should reference a field position past the visible list"
+    );
+
+    // Toggling back restores the full openai row count.
+    assert!(state.route_settings_key(
+        &crate::input::TerminalKey::new(
+            crossterm::event::KeyCode::Left,
+            crossterm::event::KeyModifiers::NONE
+        ),
+        &mut out
+    ));
+    let Some(ClientShellOverlay::Settings(settings)) = state.overlay.as_ref() else {
+        panic!("model settings");
+    };
+    assert_eq!(settings.ke_model.visible_fields().len(), 10);
+}
+
+/// Modified by ke: end-to-end coverage of the provider-overwrite fix through the real Settings
+/// save path (not just the pure `apply_model_form` unit test in `src/ke/slash.rs`): switching the
+/// form to `cli`, filling `command`, and pressing apply must persist `provider = "cli"`.
+#[test]
+fn ke_model_settings_save_persists_the_selected_cli_provider() {
+    let _guard = crate::config::test_config_env_lock().lock().unwrap();
+    let path = std::env::temp_dir().join(format!(
+        "ke-model-settings-save-{}.toml",
+        std::process::id()
+    ));
+    let _ = std::fs::remove_file(&path);
+    std::env::set_var(crate::config::CONFIG_PATH_ENV_VAR, &path);
+
+    let mut state = ClientShellState::new(ClientShellConfig::from_config(&Config::default()));
+    state.set_snapshot(Box::new(snapshot()));
+    state.set_pane_surface(surface());
+    state.open_settings_overlay();
+    let mut out = ClientShellInput::default();
+    state.select_settings_section(ClientSettingsSection::KeModel, &mut out);
+
+    assert!(state.route_settings_key(
+        &crate::input::TerminalKey::new(
+            crossterm::event::KeyCode::Up,
+            crossterm::event::KeyModifiers::NONE
+        ),
+        &mut out
+    ));
+    assert!(state.route_settings_key(
+        &crate::input::TerminalKey::new(
+            crossterm::event::KeyCode::Right,
+            crossterm::event::KeyModifiers::NONE
+        ),
+        &mut out
+    ));
+    if let Some(ClientShellOverlay::Settings(settings)) = state.overlay.as_mut() {
+        settings.ke_model.name = TextEditor::from("kimi-cli");
+        settings.ke_model.command = TextEditor::from(r#"sh -c "kimi -p \"$(cat)\"""#);
+    }
+    state.save_ke_model_form(&mut out);
+
+    let written = std::fs::read_to_string(&path).expect("config written");
+    assert!(written.contains("[ke.model.profiles.kimi-cli]"), "{written}");
+    assert!(written.contains("provider = \"cli\""), "{written}");
+    assert!(!written.contains("provider = \"openai\""), "{written}");
+    assert!(
+        written.contains(r#"command = ["sh", "-c", "kimi -p \"$(cat)\""]"#),
+        "{written}"
+    );
+
+    std::env::remove_var(crate::config::CONFIG_PATH_ENV_VAR);
+    let _ = std::fs::remove_file(&path);
+}
+
+#[test]
+fn settings_includes_the_redact_tab() {
+    let mut state = ClientShellState::new(ClientShellConfig::from_config(&Config::default()));
+    state.set_snapshot(Box::new(snapshot()));
+    state.set_pane_surface(surface());
+    state.open_settings_overlay();
+    let mut out = ClientShellInput::default();
+    state.select_settings_section(ClientSettingsSection::KeRedact, &mut out);
+    state.compose(106, 40).expect("settings redact tab");
+    assert!(
+        state
+            .hits
+            .settings_tabs
+            .iter()
+            .any(|(_, section)| *section == ClientSettingsSection::KeRedact),
+        "settings must expose a redact tab"
+    );
+    assert_eq!(
+        state.hits.settings_choices.len(),
+        6,
+        "redact tab lists exactly the six [ke.redact] families"
+    );
+
+    let Some(ClientShellOverlay::Settings(settings)) = state.overlay.as_ref() else {
+        panic!("redact settings");
+    };
+    assert!(settings.ke_redact.api_keys, "api_keys defaults to on");
+    assert!(
+        !settings.ke_redact.internal_ips,
+        "internal_ips defaults to off"
+    );
+
+    assert!(state.route_settings_key(
+        &crate::input::TerminalKey::new(
+            crossterm::event::KeyCode::Left,
+            crossterm::event::KeyModifiers::NONE
+        ),
+        &mut out
+    ));
+    let Some(ClientShellOverlay::Settings(settings)) = state.overlay.as_ref() else {
+        panic!("redact settings");
+    };
+    assert!(!settings.ke_redact.api_keys, "left/right flips the selected row");
+}
+
 #[test]
 fn dragging_the_composer_divider_changes_the_right_dock_width() {
     use crossterm::event::{MouseButton, MouseEventKind};

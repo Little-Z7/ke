@@ -46,6 +46,9 @@ pub(super) fn render_settings_overlay(
         integration_height.max(22)
     } else if settings.section == ClientSettingsSection::KeModel {
         24
+    } else if settings.section == ClientSettingsSection::KeRedact {
+        // Modified by ke: 6 rows at 2 lines each (value + description) plus header/footer chrome.
+        30
     } else {
         22
     };
@@ -230,6 +233,34 @@ pub(super) fn render_settings_overlay(
             choice_hits = rendered.0;
             cursor = rendered.1;
         }
+        ClientSettingsSection::KeRedact => {
+            put_text(
+                buffer,
+                content.x,
+                content.y,
+                content.width,
+                "脱敏设置",
+                Style::default()
+                    .fg(palette.text)
+                    .bg(palette.panel_bg)
+                    .add_modifier(Modifier::BOLD),
+            );
+            put_text(
+                buffer,
+                content.x,
+                content.y + 1,
+                content.width,
+                "发给 agent / 模型前按类别打码敏感信息，关掉某项后这类内容会原样发出",
+                Style::default().fg(palette.overlay1).bg(palette.panel_bg),
+            );
+            let fields = Rect::new(
+                content.x,
+                content.y + 3,
+                content.width,
+                content.height.saturating_sub(3),
+            );
+            choice_hits = super::render_ke_redact_fields(buffer, fields, &settings.ke_redact, palette);
+        }
     }
 
     let installable = settings
@@ -272,7 +303,10 @@ pub(super) fn render_settings_overlay(
         inner.x,
         inner.bottom().saturating_sub(2),
         inner.width,
-        if settings.section == ClientSettingsSection::KeModel {
+        if matches!(
+            settings.section,
+            ClientSettingsSection::KeModel | ClientSettingsSection::KeRedact
+        ) {
             " ↑↓ field  ←→ cycle  tab section"
         } else {
             " ↑↓ select  tab section"

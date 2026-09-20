@@ -302,6 +302,12 @@ pub(crate) fn apply_provider(content: &str, name: &str, base_url: &str, key_env:
     upsert_section_value(&next, &section, "api_key_env", &toml_quote(key_env))
 }
 
+/// Builds a TOML array literal from string elements, e.g. `["opencode", "run"]`.
+fn toml_string_array(values: &[String]) -> String {
+    let items: Vec<String> = values.iter().map(|value| toml_quote(value)).collect();
+    format!("[{}]", items.join(", "))
+}
+
 pub(crate) fn apply_model_form(
     content: &str,
     enabled: bool,
@@ -315,22 +321,37 @@ pub(crate) fn apply_model_form(
         next = upsert_section_bool(&next, "ke.model", "cloud_confirmed", true);
     }
     let section = format!("ke.model.profiles.{name}");
-    next = upsert_section_value(&next, &section, "provider", &toml_quote("openai"));
-    next = upsert_section_value(&next, &section, "base_url", &toml_quote(&profile.base_url));
-    next = upsert_section_value(
-        &next,
-        &section,
-        "api_key_env",
-        &toml_quote(&profile.api_key_env),
-    );
-    next = upsert_section_value(&next, &section, "model", &toml_quote(&profile.model));
-    next = upsert_section_value(&next, &section, "think", &toml_quote(&profile.think));
-    upsert_section_value(
-        &next,
-        &section,
-        "max_tokens",
-        &profile.max_tokens.to_string(),
-    )
+    // Modified by ke: write the provider the form actually selected instead of always hardcoding
+    // "openai" (that used to silently rewrite a hand-written `provider = "cli"` preset back to
+    // "openai" the moment someone pressed apply on any other field in Settings). Only write the
+    // fields that make sense for that provider so saving a cli preset does not also leave stale
+    // openai-only fields (or vice versa).
+    next = upsert_section_value(&next, &section, "provider", &toml_quote(&profile.provider));
+    if profile.provider == "cli" {
+        next = upsert_section_value(
+            &next,
+            &section,
+            "command",
+            &toml_string_array(&profile.command),
+        );
+    } else {
+        next = upsert_section_value(&next, &section, "base_url", &toml_quote(&profile.base_url));
+        next = upsert_section_value(
+            &next,
+            &section,
+            "api_key_env",
+            &toml_quote(&profile.api_key_env),
+        );
+        next = upsert_section_value(&next, &section, "model", &toml_quote(&profile.model));
+        next = upsert_section_value(&next, &section, "think", &toml_quote(&profile.think));
+        next = upsert_section_value(
+            &next,
+            &section,
+            "max_tokens",
+            &profile.max_tokens.to_string(),
+        );
+    }
+    next
 }
 
 pub(crate) fn apply_plan_template(content: &str, plan: &PlanTemplate) -> String {
@@ -486,6 +507,49 @@ mod tests {
         assert!(plan.contains("ark.cn-beijing.volces.com"));
         assert!(plan.contains("ARK_API_KEY"));
         assert!(plan.contains("cloud_confirmed = true"));
+    }
+
+    /// A hand-written `provider = "cli"` preset must round-trip through the form: apply must
+    /// write the provider the caller actually selected, not silently rewrite it back to
+    /// "openai" (a real bug: the old code hardcoded `toml_quote("openai")` here), and cli-only
+    /// fields (`command`) must be written while openai-only fields stay out.
+    #[test]
+    fn apply_model_form_writes_the_selected_provider_not_always_openai() {
+        let form = apply_model_form(
+            "",
+            true,
+            "kimi-cli",
+            &KeModelProfile {
+                provider: "cli".into(),
+                command: vec!["sh".into(), "-c".into(), "kimi -p \"$(cat)\"".into()],
+                ..KeModelProfile::default()
+            },
+            false,
+        );
+        assert!(form.contains("[ke.model.profiles.kimi-cli]"));
+        assert!(form.contains("provider = \"cli\""));
+        assert!(!form.contains("provider = \"openai\""));
+        assert!(form.contains(r#"command = ["sh", "-c", "kimi -p \"$(cat)\""]"#));
+        assert!(!form.contains("base_url"));
+        assert!(!form.contains("api_key_env"));
+        assert!(!form.contains("max_tokens"));
+
+        // Re-applying an openai profile still writes all its fields (no regression from the
+        // provider-conditional branch).
+        let openai_form = apply_model_form(
+            "",
+            true,
+            "ark",
+            &KeModelProfile {
+                provider: "openai".into(),
+                base_url: "https://example/v3".into(),
+                ..KeModelProfile::default()
+            },
+            false,
+        );
+        assert!(openai_form.contains("provider = \"openai\""));
+        assert!(openai_form.contains("base_url = \"https://example/v3\""));
+        assert!(!openai_form.contains("command ="));
     }
 
     #[test]

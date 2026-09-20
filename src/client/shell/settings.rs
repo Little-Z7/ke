@@ -43,6 +43,7 @@ impl ClientShellState {
             loading_integrations: false,
             installing_integrations: false,
             ke_model: super::ke_model::ClientKeModelOverlay::from_config(&self.config.ke),
+            ke_redact: super::ke_redact::ClientKeRedactOverlay::from_config(&self.config.ke),
         }));
     }
 
@@ -61,6 +62,14 @@ impl ClientShellState {
                     _ => None,
                 })
                 .unwrap_or(1),
+            ClientSettingsSection::KeRedact => self
+                .overlay
+                .as_ref()
+                .and_then(|overlay| match overlay {
+                    ClientShellOverlay::Settings(settings) => Some(settings.ke_redact.field),
+                    _ => None,
+                })
+                .unwrap_or(0),
         }
     }
 
@@ -109,7 +118,12 @@ impl ClientShellState {
                 ClientSettingsSection::Indicators | ClientSettingsSection::Sound => 2,
                 ClientSettingsSection::Toast => 4,
                 ClientSettingsSection::Integrations => settings.integrations.len(),
-                ClientSettingsSection::KeModel => 8,
+                // Modified by ke: the row count depends on the selected provider (openai shows
+                // more fields than cli), so this must be computed from the same
+                // `visible_fields()` the field navigation and the renderer use instead of a
+                // constant, or ↑↓ could select a row past what is actually drawn.
+                ClientSettingsSection::KeModel => settings.ke_model.visible_fields().len(),
+                ClientSettingsSection::KeRedact => super::ke_redact::REDACT_FIELD_COUNT,
             },
             _ => 0,
         }
@@ -129,6 +143,9 @@ impl ClientShellState {
         if settings.section == ClientSettingsSection::KeModel {
             settings.ke_model.field = settings.selected;
         }
+        if settings.section == ClientSettingsSection::KeRedact {
+            settings.ke_redact.field = settings.selected;
+        }
         if settings.section == ClientSettingsSection::Theme {
             self.preview_selected_theme();
         }
@@ -141,6 +158,9 @@ impl ClientShellState {
                 settings.selected = index.min(count - 1);
                 if settings.section == ClientSettingsSection::KeModel {
                     settings.ke_model.field = settings.selected;
+                }
+                if settings.section == ClientSettingsSection::KeRedact {
+                    settings.ke_redact.field = settings.selected;
                 }
             }
         }
@@ -240,6 +260,7 @@ impl ClientShellState {
             }
             ClientSettingsSection::Integrations => self.install_recommended_integrations(outcome),
             ClientSettingsSection::KeModel => self.save_ke_model_form(outcome),
+            ClientSettingsSection::KeRedact => self.save_ke_redact_form(outcome),
         }
     }
 
@@ -381,6 +402,15 @@ impl ClientShellState {
         ) {
             return self.route_settings_model_key(key, outcome);
         }
+        if matches!(
+            self.overlay,
+            Some(ClientShellOverlay::Settings(ClientSettingsOverlay {
+                section: ClientSettingsSection::KeRedact,
+                ..
+            }))
+        ) {
+            return self.route_settings_redact_key(key, outcome);
+        }
         let (code, modifiers) = crate::config::normalize_key_combo((key.code, key.modifiers));
         if code == KeyCode::Esc {
             if !matches!(
@@ -479,6 +509,57 @@ impl ClientShellState {
                     outcome.repaint = true;
                 }
             }
+        }
+        true
+    }
+
+    /// Modified by ke: key routing for the `[ke.redact]` tab. Every row is a plain bool, so
+    /// unlike `route_settings_model_key` this never falls through to a text editor.
+    fn route_settings_redact_key(
+        &mut self,
+        key: &crate::input::TerminalKey,
+        outcome: &mut ClientShellInput,
+    ) -> bool {
+        if key.kind == crossterm::event::KeyEventKind::Release {
+            return true;
+        }
+        let (code, modifiers) = crate::config::normalize_key_combo((key.code, key.modifiers));
+        let shift = modifiers.contains(KeyModifiers::SHIFT);
+        let plain = modifiers.is_empty();
+        match code {
+            KeyCode::Esc => {
+                self.cancel_settings_overlay();
+                outcome.repaint = true;
+                return true;
+            }
+            KeyCode::Tab if !shift => {
+                self.move_settings_section(1, outcome);
+                return true;
+            }
+            KeyCode::BackTab => {
+                self.move_settings_section(-1, outcome);
+                return true;
+            }
+            KeyCode::Up => {
+                self.ke_redact_nudge_field(-1);
+                outcome.repaint = true;
+                return true;
+            }
+            KeyCode::Down => {
+                self.ke_redact_nudge_field(1);
+                outcome.repaint = true;
+                return true;
+            }
+            KeyCode::Enter if plain => {
+                self.save_ke_redact_form(outcome);
+                return true;
+            }
+            KeyCode::Left | KeyCode::Right | KeyCode::Char(' ') if plain => {
+                self.ke_redact_toggle_current();
+                outcome.repaint = true;
+                return true;
+            }
+            _ => {}
         }
         true
     }

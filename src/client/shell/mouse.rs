@@ -1555,6 +1555,17 @@ impl ClientShellState {
                     {
                         self.ke_model_toggle(1);
                     }
+                    // Modified by ke: every `[ke.redact]` row is a bool, so clicking it always
+                    // flips it (there is no non-toggle row to guard against, unlike KeModel).
+                    if matches!(
+                        self.overlay,
+                        Some(ClientShellOverlay::Settings(ClientSettingsOverlay {
+                            section: ClientSettingsSection::KeRedact,
+                            ..
+                        }))
+                    ) {
+                        self.ke_redact_toggle_current();
+                    }
                     let immediate = matches!(
                         self.overlay,
                         Some(ClientShellOverlay::Settings(ClientSettingsOverlay {

@@ -1331,7 +1331,29 @@ fn render_confirm_close_overlay(
     })
 }
 
-// Modified by ke: `[ke.model]` form fields shared by Settings and the standalone overlay.
+/// Row labels for `render_ke_model_fields`, keyed by the same field ids `ClientKeModelOverlay`
+/// uses internally. Kept next to the renderer (rather than on the form) since it is purely a
+/// display concern.
+fn ke_model_field_label(field_id: usize) -> &'static str {
+    match field_id {
+        0 => "enable resident",
+        1 => "provider",
+        2 => "access template",
+        3 => "profile name",
+        4 => "endpoint url",
+        5 => "model / endpoint id",
+        6 => "api key env",
+        7 => "thinking",
+        8 => "max tokens",
+        9 => "command",
+        10 => "panel model",
+        _ => "",
+    }
+}
+
+/// Modified by ke: `[ke.model]` form fields shared by Settings and the standalone overlay. Which
+/// rows are drawn (and how many there are) comes entirely from `form.visible_fields()`, so this
+/// never disagrees with `settings_choice_count()`/field navigation about the row count.
 pub(super) fn render_ke_model_fields(
     b: &mut Buffer,
     area: Rect,
@@ -1344,63 +1366,101 @@ pub(super) fn render_ke_model_fields(
         .fg(p.text)
         .bg(p.surface0)
         .add_modifier(Modifier::BOLD);
-    let rows = [
-        (
-            0usize,
-            "enable resident",
-            if form.enabled { "on" } else { "off" }.to_string(),
-        ),
-        (1, "access template", form.plan_label().to_string()),
-        (2, "profile name", form.name.as_str().to_string()),
-        (3, "endpoint url", form.base_url.as_str().to_string()),
-        (4, "model / endpoint id", form.model.as_str().to_string()),
-        (5, "api key env", form.api_key_env.as_str().to_string()),
-        (
-            6,
-            "thinking",
-            super::ke_model::THINK_LABELS
-                .get(form.think)
-                .copied()
-                .unwrap_or("自动")
-                .to_string(),
-        ),
-        (7, "max tokens", form.max_tokens.as_str().to_string()),
-    ];
+    let note = Style::default().fg(p.overlay1).bg(p.panel_bg);
+    let visible = form.visible_fields();
     let mut cursor = None;
     let mut hits = Vec::new();
-    for (offset, (index, name, value)) in rows.iter().enumerate() {
-        let y = area.y + offset as u16;
+    for (position, field_id) in visible.iter().copied().enumerate() {
+        let y = area.y + position as u16;
         if y >= area.bottom() {
             break;
         }
         let row = Rect::new(area.x, y, area.width, 1);
-        hits.push((row, *index));
-        let selected = form.field == *index;
-        put_text(b, area.x, y, 22, &format!(" {name}"), label);
+        hits.push((row, position));
+        let selected = form.field == position;
+        put_text(
+            b,
+            area.x,
+            y,
+            22,
+            &format!(" {}", ke_model_field_label(field_id)),
+            label,
+        );
         let box_rect = Rect::new(area.x + 22, y, area.width.saturating_sub(22), 1);
         b.set_style(box_rect, if selected { active } else { field });
-        if matches!(index, 2 | 3 | 4 | 5 | 7) && selected {
-            let editor = match index {
-                2 => &form.name,
-                3 => &form.base_url,
-                4 => &form.model,
-                5 => &form.api_key_env,
-                7 => &form.max_tokens,
-                _ => &form.name,
-            };
-            cursor = text_editor::render(b, box_rect, editor, active);
-        } else {
+        if selected {
+            if let Some(editor) = form.editor_for(field_id) {
+                cursor = text_editor::render(b, box_rect, editor, active);
+                continue;
+            }
+        }
+        put_text(
+            b,
+            box_rect.x + 1,
+            y,
+            box_rect.width.saturating_sub(1),
+            &form.field_value(field_id),
+            if selected { active } else { field },
+        );
+    }
+    if !form.is_openai() {
+        let note_y = area.y + visible.len() as u16;
+        if note_y < area.bottom() {
             put_text(
                 b,
-                box_rect.x + 1,
-                y,
-                box_rect.width.saturating_sub(1),
-                value,
-                if selected { active } else { field },
+                area.x,
+                note_y,
+                area.width,
+                " cli 跑在 resident 目录下，模型要写在它自己的全局配置里，项目级配置对它不生效",
+                note,
             );
         }
     }
     (hits, cursor)
+}
+
+/// Added by ke: `[ke.redact]` form fields. Two lines per row (value + a short description of
+/// what turning it off/on changes) so the toggle's effect is never a guess.
+pub(super) fn render_ke_redact_fields(
+    b: &mut Buffer,
+    area: Rect,
+    form: &super::ke_redact::ClientKeRedactOverlay,
+    p: &Palette,
+) -> Vec<(Rect, usize)> {
+    let label = Style::default().fg(p.subtext0).bg(p.panel_bg);
+    let field = Style::default().fg(p.text).bg(p.surface0);
+    let active = Style::default()
+        .fg(p.text)
+        .bg(p.surface0)
+        .add_modifier(Modifier::BOLD);
+    let desc = Style::default().fg(p.overlay1).bg(p.panel_bg);
+    let mut hits = Vec::new();
+    for (index, (name, description)) in super::ke_redact::REDACT_FIELDS.iter().enumerate() {
+        let y = area.y + index as u16 * 2;
+        if y >= area.bottom() {
+            break;
+        }
+        let row = Rect::new(area.x, y, area.width, 1);
+        hits.push((row, index));
+        let selected = form.field == index;
+        put_text(b, area.x, y, 22, &format!(" {name}"), label);
+        let box_rect = Rect::new(area.x + 22, y, area.width.saturating_sub(22), 1);
+        b.set_style(box_rect, if selected { active } else { field });
+        let value = if form.value(index) { "开" } else { "关" };
+        put_text(
+            b,
+            box_rect.x + 1,
+            y,
+            box_rect.width.saturating_sub(1),
+            value,
+            if selected { active } else { field },
+        );
+        let desc_y = y + 1;
+        if desc_y < area.bottom() {
+            put_text(b, area.x, desc_y, area.width, &format!("   {description}"), desc);
+        }
+    }
+    hits
 }
 
 fn render_ke_model_overlay(
@@ -1408,7 +1468,11 @@ fn render_ke_model_overlay(
     form: &super::ke_model::ClientKeModelOverlay,
     p: &Palette,
 ) -> Option<OverlayRender> {
-    let q = popup(b.area, 64, 18)?;
+    // Modified by ke: the field count depends on the provider (openai currently has the most
+    // rows, at 10), so the popup and the fields area are sized from `visible_fields()` instead of
+    // a constant, and the save row sits right after them wherever that ends up.
+    let field_rows = form.visible_fields().len() as u16;
+    let q = popup(b.area, 64, field_rows + 12)?;
     let i = panel(b, q, p.accent, p.panel_bg)?;
     let title = Style::default()
         .fg(p.text)
@@ -1416,13 +1480,13 @@ fn render_ke_model_overlay(
         .add_modifier(Modifier::BOLD);
     let label = Style::default().fg(p.subtext0).bg(p.panel_bg);
     put_text(b, i.x, i.y, i.width, " 壳模型", title);
-    let fields = Rect::new(i.x, i.y + 1, i.width, 8);
+    let fields = Rect::new(i.x, i.y + 1, i.width, field_rows + 1);
     let (hits, cursor) = render_ke_model_fields(b, fields, form, p);
     let _ = hits;
-    let save_y = i.y + 11;
+    let save_y = i.y + 1 + field_rows + 2;
     let save = Rect::new(i.x + 1, save_y, 12, 1);
     let cancel = Rect::new(i.x + 15, save_y, 14, 1);
-    let save_style = if form.field == 8 {
+    let save_style = if form.field == field_rows as usize {
         Style::default()
             .fg(contrast(p))
             .bg(p.accent)
@@ -1440,7 +1504,7 @@ fn render_ke_model_overlay(
     put_text(
         b,
         i.x,
-        i.y + 13,
+        save_y + 2,
         i.width,
         " ←→ 切换模板 · 方舟模型可改成 ep- 接入点 · 密钥只写环境变量名",
         label,
