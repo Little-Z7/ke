@@ -172,8 +172,6 @@ pub(crate) fn redact(text: &str, rules: RedactRules) -> Redaction {
 /// and keeps the per-family counters in [`Mapping`] independent, so hiding an email never skips
 /// or reuses a number that belongs to a secret.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-// Unused until the composer path switches from `redact` to `mask`; drop this allow then.
-#[allow(dead_code)]
 enum PlaceholderKind {
     /// `api_keys`, `private_keys`, and `env_secrets` all share this family: they are all
     /// credentials, and a caller reversing a mask does not need to know which rule caught one.
@@ -183,8 +181,6 @@ enum PlaceholderKind {
 }
 
 impl PlaceholderKind {
-    // Unused until the composer path switches from `redact` to `mask`; drop this allow then.
-    #[allow(dead_code)]
     fn prefix(self) -> &'static str {
         match self {
             PlaceholderKind::Secret => "KE_SECRET",
@@ -192,7 +188,64 @@ impl PlaceholderKind {
             PlaceholderKind::Email => "KE_EMAIL",
         }
     }
+
+    /// The inverse of [`prefix`](Self::prefix): the family whose placeholder prefix is exactly
+    /// `prefix`, or `None` for anything else. Used to interpret a prefix recovered by scanning
+    /// old text (see `max_placeholder_numbers`), never to mint a placeholder itself.
+    fn from_prefix(prefix: &str) -> Option<Self> {
+        match prefix {
+            "KE_SECRET" => Some(PlaceholderKind::Secret),
+            "KE_IP" => Some(PlaceholderKind::Ip),
+            "KE_EMAIL" => Some(PlaceholderKind::Email),
+            _ => None,
+        }
+    }
 }
+
+fn placeholder_scan_pattern() -> &'static Regex {
+    static PATTERN: OnceLock<Regex> = OnceLock::new();
+    PATTERN.get_or_init(|| {
+        Regex::new(r"\bKE_(SECRET|IP|EMAIL)_(\d+)")
+            .unwrap_or_else(|err| panic!("invalid placeholder-scan pattern: {err}"))
+    })
+}
+
+/// The highest placeholder number already present in `text`, per family, keyed by that family's
+/// prefix (`"KE_SECRET"`, `"KE_IP"`, `"KE_EMAIL"`; see [`PlaceholderKind::prefix`]). A family with
+/// no match in `text` is absent from the result.
+///
+/// This reads only placeholder *shapes* -- a fixed, non-secret prefix followed by digits -- never
+/// `map` and never a real value. It exists so [`Mapping::reserve_from_text`] can find out, from
+/// old chat history, which numbers a previous `Mapping` (cleared by a resident restart) already
+/// handed out, so a fresh `Mapping` never reissues one of them for a different real value.
+fn max_placeholder_numbers(text: &str) -> HashMap<&'static str, usize> {
+    let mut out: HashMap<&'static str, usize> = HashMap::new();
+    for caps in placeholder_scan_pattern().captures_iter(text) {
+        let family = match &caps[1] {
+            "SECRET" => "KE_SECRET",
+            "IP" => "KE_IP",
+            "EMAIL" => "KE_EMAIL",
+            _ => continue,
+        };
+        let Ok(number) = caps[2].parse::<usize>() else {
+            continue;
+        };
+        let slot = out.entry(family).or_insert(0);
+        if number > *slot {
+            *slot = number;
+        }
+    }
+    out
+}
+
+/// Hard cap on the number of distinct real values a single [`Mapping`] will remember. Ordinary
+/// sessions never get near this; it exists so pathological input (a runaway script that emits
+/// endless unique secret-shaped text, say) cannot grow the mapping without bound for the lifetime
+/// of a resident process. Once the cap is reached, values that have not been seen before are
+/// still hidden -- fail closed, never plaintext -- but as the irreversible [`REDACTED`] constant
+/// instead of a new placeholder, since there is no budget left to remember how to restore them.
+/// See `mapping_fails_closed_once_capacity_is_reached` below.
+pub(crate) const MAX_MAPPING_ENTRIES: usize = 10_000;
 
 /// A bidirectional mapping between real sensitive values and the stable placeholder tokens
 /// [`mask`] substitutes for them, plus the per-family counters used to mint new placeholders.
@@ -201,8 +254,6 @@ impl PlaceholderKind {
 /// serialized, written to disk, or given a `serde` impl: doing either would put the exact secrets
 /// this type exists to keep off the filesystem back onto it.
 #[derive(Debug, Default)]
-// Unused until the composer path switches from `redact` to `mask`; drop this allow then.
-#[allow(dead_code)]
 pub(crate) struct Mapping {
     real_to_placeholder: HashMap<String, String>,
     placeholder_to_real: HashMap<String, String>,
@@ -210,20 +261,53 @@ pub(crate) struct Mapping {
 }
 
 impl Mapping {
-    // Unused until the composer path switches from `redact` to `mask`; drop this allow then.
-    #[allow(dead_code)]
-    pub(crate) fn new() -> Self {
-        Self::default()
+    /// Raises the starting counter for the placeholder family whose prefix is `prefix` (matching
+    /// [`PlaceholderKind::prefix`], e.g. `"KE_SECRET"`) so the next placeholder minted for that
+    /// family is strictly greater than `at_least`. Only ever moves the counter forward: a smaller
+    /// `at_least` than what is already reserved (or already used) is a no-op, and so is an
+    /// unrecognized `prefix`. Never records any real value -- this only changes where numbering
+    /// resumes.
+    pub(crate) fn reserve_through(&mut self, prefix: &str, at_least: usize) {
+        let Some(kind) = PlaceholderKind::from_prefix(prefix) else {
+            return;
+        };
+        let counter = self.next_index.entry(kind).or_insert(0);
+        if *counter < at_least {
+            *counter = at_least;
+        }
+    }
+
+    /// Scans `text` for placeholder tokens [`mask`] could have minted (see
+    /// `max_placeholder_numbers`) and reserves through the highest number found in each family.
+    ///
+    /// This is what lets a resident starting up feed its fresh `Mapping` the session's
+    /// `chat.jsonl` so a restart never causes two different real values to share one placeholder:
+    /// `Mapping` only lives in process memory (see its own doc comment) and a restart clears it,
+    /// but the chat log is not cleared, so it can still contain a placeholder from before the
+    /// restart -- most often echoed back verbatim in a past model reply, since a model only ever
+    /// sees masked text. Left alone, a fresh `Mapping` would start counting from 1 again and could
+    /// hand that same placeholder string to a completely different real value, and the model would
+    /// have no way to tell the two apart. After this call, that old placeholder is instead an
+    /// orphan -- this `Mapping` has no record of what it stood for, so [`restore`] leaves it alone
+    /// -- rather than a number that gets reused.
+    pub(crate) fn reserve_from_text(&mut self, text: &str) {
+        for (prefix, max_number) in max_placeholder_numbers(text) {
+            self.reserve_through(prefix, max_number);
+        }
     }
 
     /// Returns the placeholder for `real`, reusing the one already assigned if this exact value
     /// has been seen before (in this call or an earlier one), or minting the next number in
-    /// `kind`'s sequence otherwise.
-    // Unused until the composer path switches from `redact` to `mask`; drop this allow then.
-    #[allow(dead_code)]
+    /// `kind`'s sequence otherwise. Once [`MAX_MAPPING_ENTRIES`] distinct values have been
+    /// recorded, a value that has never been seen before gets [`REDACTED`] instead of a fresh
+    /// placeholder -- still hidden, just not reversible; the mapping itself is never grown past
+    /// the cap.
     fn placeholder_for(&mut self, kind: PlaceholderKind, real: &str) -> String {
         if let Some(existing) = self.real_to_placeholder.get(real) {
             return existing.clone();
+        }
+        if self.real_to_placeholder.len() >= MAX_MAPPING_ENTRIES {
+            return REDACTED.to_owned();
         }
         let counter = self.next_index.entry(kind).or_insert(0);
         *counter += 1;
@@ -259,8 +343,6 @@ impl Mapping {
 /// (`KE_SECRET_1abc`) is itself skipped is a deliberate tradeoff: a real secret that happens to
 /// begin with our own placeholder format is negligible, while corrupting already-masked text on
 /// every replay is not.
-// Unused until the composer path switches from `redact` to `mask`; drop this allow then.
-#[allow(dead_code)]
 fn placeholder_prefix_len(value: &str) -> Option<usize> {
     const PREFIXES: [&str; 3] = ["KE_SECRET_", "KE_IP_", "KE_EMAIL_"];
     PREFIXES.iter().find_map(|prefix| {
@@ -282,8 +364,6 @@ fn placeholder_prefix_len(value: &str) -> Option<usize> {
 /// up by a greedy capture group — is a no-op and does not inflate `map`'s counters.
 /// `Redaction.count` has the same meaning as in `redact`: the number of replacements made, not
 /// counting matches that were skipped because they were already placeholders.
-// Unused until the composer path switches from `redact` to `mask`; drop this allow then.
-#[allow(dead_code)]
 pub(crate) fn mask(text: &str, rules: RedactRules, map: &mut Mapping) -> Redaction {
     if !rules.any() || text.is_empty() {
         return Redaction {
@@ -388,7 +468,9 @@ pub(crate) fn mask(text: &str, rules: RedactRules, map: &mut Mapping) -> Redacti
 /// Reverses [`mask`]: every placeholder token present in `text` is replaced with the real value
 /// recorded in `map`. Text that contains no placeholders (including when `map` is empty) is
 /// returned unchanged.
-// Unused until the composer path switches from `redact` to `mask`; drop this allow then.
+// Still has no caller: nothing reads a model's answer back through the resident and substitutes
+// real values into it yet. Drop this allow once the sub entry point that round-trips a model
+// reply (which may echo a placeholder verbatim) back onto a pane lands and calls this.
 #[allow(dead_code)]
 pub(crate) fn restore(text: &str, map: &Mapping) -> String {
     if map.placeholder_to_real.is_empty() || text.is_empty() {
@@ -505,7 +587,7 @@ mod tests {
             emails: true,
             ..RedactRules::default()
         };
-        let mut map = Mapping::new();
+        let mut map = Mapping::default();
         let out = mask(
             "primary ops@example.com, backup ops@example.com",
             rules,
@@ -521,7 +603,7 @@ mod tests {
             emails: true,
             ..RedactRules::default()
         };
-        let mut map = Mapping::new();
+        let mut map = Mapping::default();
         let first = mask("contact ops@example.com", rules, &mut map);
         assert_eq!(first.text, "contact KE_EMAIL_1");
 
@@ -538,7 +620,7 @@ mod tests {
             emails: true,
             ..RedactRules::default()
         };
-        let mut map = Mapping::new();
+        let mut map = Mapping::default();
         let out = mask("a@example.com and b@example.com", rules, &mut map);
         assert_eq!(out.text, "KE_EMAIL_1 and KE_EMAIL_2");
         assert_eq!(out.count, 2);
@@ -551,7 +633,7 @@ mod tests {
             emails: true,
             ..RedactRules::default()
         };
-        let mut map = Mapping::new();
+        let mut map = Mapping::default();
         let out = mask("mail ops@example.com from 192.168.1.20", rules, &mut map);
         assert_eq!(out.text, "mail KE_EMAIL_1 from KE_IP_1");
         assert_eq!(out.count, 2);
@@ -559,7 +641,7 @@ mod tests {
 
     #[test]
     fn mask_hides_api_keys_and_env_secrets_behind_a_secret_placeholder() {
-        let mut map = Mapping::new();
+        let mut map = Mapping::default();
         let out = mask(
             "token sk-live-abcdef123456\nDB_PASSWORD=hunter2",
             RedactRules::default(),
@@ -574,7 +656,7 @@ mod tests {
 
     #[test]
     fn mask_leaves_plain_text_untouched_with_zero_count() {
-        let mut map = Mapping::new();
+        let mut map = Mapping::default();
         let text = "echo hello && ls -la ~/projects/skate-park";
         let out = mask(text, RedactRules::default(), &mut map);
         assert_eq!(out.text, text);
@@ -593,7 +675,7 @@ mod tests {
             emails: true,
             ..RedactRules::default()
         };
-        let mut map = Mapping::new();
+        let mut map = Mapping::default();
         let text = "reach ops@example.com from 10.0.0.7, then ops@example.com again";
         let out = mask(text, rules, &mut map);
         assert_ne!(
@@ -605,7 +687,7 @@ mod tests {
 
     #[test]
     fn restore_handles_placeholder_numbers_that_share_a_prefix() {
-        let mut map = Mapping::new();
+        let mut map = Mapping::default();
         // Ten distinct secret-shaped values force `KE_SECRET_10` to exist alongside
         // `KE_SECRET_1`; restore must not let the shorter placeholder eat the "0".
         let text: String = (0..10)
@@ -620,7 +702,7 @@ mod tests {
 
     #[test]
     fn masking_an_already_masked_text_is_a_no_op() {
-        let mut map = Mapping::new();
+        let mut map = Mapping::default();
         let text = "TOKEN=sk-live-abcdefgh12345678";
         let first = mask(text, RedactRules::default(), &mut map);
         let second = mask(&first.text, RedactRules::default(), &mut map);
@@ -639,7 +721,7 @@ mod tests {
             emails: true,
             ..RedactRules::default()
         };
-        let mut map = Mapping::new();
+        let mut map = Mapping::default();
         let text = "reach ops@example.com from 10.0.0.7";
         let first = mask(text, rules, &mut map);
         assert_eq!(first.text, "reach KE_EMAIL_1 from KE_IP_1");
@@ -655,7 +737,7 @@ mod tests {
 
     #[test]
     fn masking_stays_idempotent_when_a_secret_ends_in_punctuation() {
-        let mut map = Mapping::new();
+        let mut map = Mapping::default();
         let text = "export TOKEN=sk-live-abcdefgh12345678; echo done";
         let first = mask(text, RedactRules::default(), &mut map);
         let second = mask(&first.text, RedactRules::default(), &mut map);
@@ -665,7 +747,7 @@ mod tests {
 
     #[test]
     fn masking_leaves_a_handwritten_placeholder_and_its_trailing_text_alone() {
-        let mut map = Mapping::new();
+        let mut map = Mapping::default();
         // Seed the map so KE_SECRET_1 is a real placeholder.
         let seeded = mask(
             "TOKEN=sk-live-abcdefgh12345678",
@@ -682,7 +764,7 @@ mod tests {
 
     #[test]
     fn masking_leaves_a_placeholder_mid_sentence_followed_by_non_whitespace_alone() {
-        let mut map = Mapping::new();
+        let mut map = Mapping::default();
         let seeded = mask(
             "TOKEN=sk-live-abcdefgh12345678",
             RedactRules::default(),
@@ -715,8 +797,142 @@ mod tests {
     }
 
     #[test]
+    fn mapping_fails_closed_once_capacity_is_reached() {
+        let rules = RedactRules {
+            emails: true,
+            ..RedactRules::NONE
+        };
+        let mut map = Mapping::default();
+        for i in 0..MAX_MAPPING_ENTRIES {
+            let out = mask(&format!("user{i}@example.com"), rules, &mut map);
+            assert_eq!(out.count, 1, "value {i} should still be masked");
+        }
+
+        // A brand new value past the cap must never reach the model as plaintext: it still gets
+        // hidden, just with the irreversible constant instead of a fresh, restorable placeholder.
+        let overflow = mask("overflow@example.com", rules, &mut map);
+        assert_eq!(
+            overflow.text, REDACTED,
+            "capacity exceeded must fail closed to REDACTED, never plaintext"
+        );
+        assert_eq!(overflow.count, 1);
+        assert!(
+            !map.placeholder_to_real.contains_key(REDACTED),
+            "the fail-closed constant must not be recorded as a restorable placeholder"
+        );
+
+        // Values recorded before the cap was hit keep working normally (still a hit: the text
+        // was substituted, even though the placeholder itself is not new).
+        let known = mask("user0@example.com", rules, &mut map);
+        assert_eq!(known.text, "KE_EMAIL_1");
+        assert_eq!(known.count, 1);
+    }
+
+    #[test]
+    fn max_placeholder_numbers_finds_the_highest_per_family_and_ignores_absent_ones() {
+        let text = "a KE_SECRET_3 b KE_SECRET_10 c KE_EMAIL_1 d KE_SECRET_2 e";
+        let found = max_placeholder_numbers(text);
+        assert_eq!(
+            found.get("KE_SECRET"),
+            Some(&10),
+            "non-contiguous numbers, including a two-digit one, must still find the true max"
+        );
+        assert_eq!(found.get("KE_EMAIL"), Some(&1));
+        assert_eq!(
+            found.get("KE_IP"),
+            None,
+            "a family with no match in the text must be absent from the result"
+        );
+    }
+
+    #[test]
+    fn max_placeholder_numbers_is_empty_for_text_with_no_placeholders() {
+        assert!(max_placeholder_numbers("").is_empty());
+        assert!(max_placeholder_numbers("no placeholders in this sentence at all").is_empty());
+    }
+
+    #[test]
+    fn reserve_through_raises_the_floor_per_family_independently() {
+        let mut map = Mapping::default();
+        map.reserve_through("KE_SECRET", 5);
+        map.reserve_through("KE_EMAIL", 2);
+        // Unrecognized prefix: must not panic, and must not invent a new family.
+        map.reserve_through("KE_BOGUS", 99);
+
+        let rules = RedactRules {
+            emails: true,
+            ..RedactRules::default()
+        };
+        let out = mask(
+            "token sk-live-abcdefgh12345678 and ops@example.com",
+            rules,
+            &mut map,
+        );
+        assert!(
+            out.text.contains("KE_SECRET_6"),
+            "secret numbering resumes just past its reserved floor: {}",
+            out.text
+        );
+        assert!(
+            out.text.contains("KE_EMAIL_3"),
+            "email numbering resumes just past its own, independent floor: {}",
+            out.text
+        );
+
+        // Reserving a lower floor afterward must not un-reserve numbers already promised.
+        map.reserve_through("KE_SECRET", 1);
+        let more = mask("token2 sk-live-zzzzzzzzzzzzzzzzzz", rules, &mut map);
+        assert!(more.text.contains("KE_SECRET_7"), "{}", more.text);
+    }
+
+    #[test]
+    fn reserve_from_text_with_no_matches_does_not_disturb_normal_numbering() {
+        let rules = RedactRules {
+            emails: true,
+            ..RedactRules::default()
+        };
+        let mut map = Mapping::default();
+        map.reserve_from_text(""); // empty chat log
+        map.reserve_from_text("no placeholders here, just an ordinary question");
+        let out = mask("mail ops@example.com", rules, &mut map);
+        assert_eq!(
+            out.text, "mail KE_EMAIL_1",
+            "numbering starts at 1 as normal"
+        );
+    }
+
+    #[test]
+    fn reserve_from_text_prevents_a_reset_mapping_from_reusing_an_old_placeholder() {
+        let mut map = Mapping::default();
+        let out = mask(
+            "token sk-live-abcdefgh12345678",
+            RedactRules::default(),
+            &mut map,
+        );
+        assert_eq!(out.text, "token KE_SECRET_1");
+
+        // Simulate a resident restart: a brand new `Mapping`, seeded only from what a previous
+        // process cycle left behind in `chat.jsonl` (here: the masked text above, standing in for
+        // an old model reply that echoed the placeholder back).
+        let mut fresh = Mapping::default();
+        fresh.reserve_from_text(&out.text);
+
+        let next = mask(
+            "token2 sk-live-zzzzzzzzzzzzzzzzzz",
+            RedactRules::default(),
+            &mut fresh,
+        );
+        assert_ne!(
+            next.text, out.text,
+            "a fresh Mapping seeded from an old chat log must not reissue KE_SECRET_1 for a \
+             different real value"
+        );
+        assert!(next.text.contains("KE_SECRET_2"), "{}", next.text);
+    }
+
+    #[test]
     fn mask_restore_mask_round_trip_keeps_the_same_placeholders() {
-        let mut map = Mapping::new();
+        let mut map = Mapping::default();
         let text = "TOKEN=sk-live-abcdefgh12345678 and ops@example.com";
         let first = mask(text, RedactRules::default(), &mut map);
         let back = restore(&first.text, &map);

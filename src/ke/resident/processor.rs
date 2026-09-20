@@ -55,10 +55,16 @@ impl Decision {
 }
 
 /// Pure decision for one request; the socket plumbing around it is `Processor::serve`.
+///
+/// `mapping` is the session's single [`redact::Mapping`], shared with the answerer thread so the
+/// same real value always gets the same placeholder everywhere. Its lock is taken only for the
+/// duration of the `redact::mask` call below -- never across the `chat_log::append` file write on
+/// the `@ke` mention path above it, which never touches the mapping at all.
 pub(crate) fn decide(
     request: &ComposerRequest,
     rules: RedactRules,
     chat_log: &std::path::Path,
+    mapping: &std::sync::Mutex<redact::Mapping>,
 ) -> Decision {
     let text = request.text.trim();
     if let Some(message) = text.strip_prefix(KE_MENTION) {
@@ -79,7 +85,12 @@ pub(crate) fn decide(
             note: Some("思考中…".into()),
         };
     }
-    let redaction = redact::redact(&request.text, rules);
+    let redaction = match mapping.lock() {
+        Ok(mut map) => redact::mask(&request.text, rules, &mut map),
+        // Poisoned lock: fall back to the non-reversible gate rather than ever sending
+        // unredacted text. Same fail-closed idea as `Mapping` hitting its capacity.
+        Err(_) => redact::redact(&request.text, rules),
+    };
     Decision::Send {
         text: redaction.text,
         note: (redaction.count > 0).then(|| format!("脱敏 {} 处", redaction.count)),
@@ -91,7 +102,6 @@ pub(crate) struct Processor {
     socket_path: PathBuf,
     chat_log: PathBuf,
     rules: RedactRules,
-    #[allow(dead_code)] // roster lives on Shared for the answerer; processor keeps a clone
     shared: Arc<super::Shared>,
     stop: Arc<AtomicBool>,
 }
@@ -146,7 +156,7 @@ impl Processor {
         let mut line = String::new();
         BufReader::new(&mut stream).read_line(&mut line)?;
         let decision = match serde_json::from_str::<ComposerRequest>(line.trim()) {
-            Ok(request) => decide(&request, self.rules, &self.chat_log),
+            Ok(request) => decide(&request, self.rules, &self.chat_log, &self.shared.redaction),
             Err(err) => Decision::Block {
                 note: format!("管家收到了看不懂的请求（{err}），未发送"),
             },
@@ -181,23 +191,31 @@ mod tests {
             .join("chat.jsonl")
     }
 
+    fn mapping() -> std::sync::Mutex<redact::Mapping> {
+        std::sync::Mutex::new(redact::Mapping::default())
+    }
+
     #[test]
     fn plain_text_is_redacted_and_sent() {
         let log = temp_chat_log();
+        let map = mapping();
         let decision = decide(
             &request("use sk-live-abcdef123456 please"),
             RedactRules::default(),
             &log,
+            &map,
         );
+        // Behavior change from plain `redact`: the gate now masks reversibly, so the composer
+        // gets a stable placeholder instead of the constant `[REDACTED]` string.
         assert_eq!(
             decision,
             Decision::Send {
-                text: "use [REDACTED] please".into(),
+                text: "use KE_SECRET_1 please".into(),
                 note: Some("脱敏 1 处".into()),
             }
         );
         assert_eq!(
-            decide(&request("ls -la"), RedactRules::default(), &log),
+            decide(&request("ls -la"), RedactRules::default(), &log, &map),
             Decision::Send {
                 text: "ls -la".into(),
                 note: None,
@@ -212,10 +230,12 @@ mod tests {
     #[test]
     fn ke_mention_is_logged_and_done() {
         let log = temp_chat_log();
+        let map = mapping();
         let decision = decide(
             &request("  @ke 哪个 agent 空着 "),
             RedactRules::default(),
             &log,
+            &map,
         );
         assert_eq!(
             decision,
@@ -230,7 +250,7 @@ mod tests {
         assert_eq!(entries[0].text, "哪个 agent 空着");
         assert_eq!(entries[0].pane_id.as_deref(), Some("w1:p1"));
         assert!(matches!(
-            decide(&request("@ke"), RedactRules::default(), &log),
+            decide(&request("@ke"), RedactRules::default(), &log, &map),
             Decision::Done { note: Some(_) }
         ));
         assert_eq!(
@@ -288,7 +308,9 @@ mod tests {
         BufReader::new(&mut stream).read_line(&mut reply).unwrap();
         let reply: serde_json::Value = serde_json::from_str(&reply).unwrap();
         assert_eq!(reply["action"], "send");
-        assert_eq!(reply["text"], "token [REDACTED]");
+        // Behavior change from plain `redact`: reversible masking, same reasoning as
+        // `plain_text_is_redacted_and_sent` above.
+        assert_eq!(reply["text"], "token KE_SECRET_1");
 
         let mut stream = crate::ipc::connect_local_stream(&socket).unwrap();
         stream.write_all(b"this is not json\n").unwrap();

@@ -124,6 +124,7 @@ git tag ke-v<KE_VERSION> && git push origin ke/main ke-v<KE_VERSION>
 | 2026-09-20 | CLAUDE.md | 由指向 AGENTS.md 的符号链接改为壳自己的文件：壳的定位、命令、ke 层结构、fork 纪律与发布流程；上游规则仍指向未改动的 AGENTS.md |
 | 2026-09-20 | src/ke/resident/sessions.rs（新增）、mod.rs、panel.rs、snapshot.rs | 管家跨会话：枚举全部运行中会话并合并 roster；面板按 (会话, pane_id) 计时、非本会话行加 `[名字]` 前缀、连不上的会话单独一行；只有本会话 agent.list 失败才计入退出；窗格内容仍只读本会话，快照注明其它会话只有状态 |
 | 2026-09-20 | src/ke/redact.rs | 可逆脱敏：`Mapping`（仅内存，不序列化）+ `mask`（按类型发放稳定占位符 `KE_SECRET_n`/`KE_IP_n`/`KE_EMAIL_n`，同一真实值跨调用始终同号）+ `restore`（占位符按长度倒序匹配，还原原文）；以完整占位符开头的值一律跳过，保证已脱敏文本二次 mask 是 no-op；现有 `redact()` 未改动，暂无调用点（带 `#[allow(dead_code)]` 与移除条件） |
+| 2026-09-20 | src/ke/redact.rs、src/ke/resident/{mod,processor,answer}.rs | 脱敏路径改用可逆占位符：`Shared.redaction` 持会话级 `Mapping`，composer 提交与模型上下文（快照/用户消息/历史）四处共用同一份映射，锁只在 mask 期间持有；映射上限 10000 条，超限回退 `[REDACTED]`（不可逆但绝不放行明文），锁中毒同样回退；resident 启动时流式扫描 chat.jsonl 取各类占位符编号水位线，避免重启后复用编号导致两个真实值共号 |
 
 ## 同步上游
 

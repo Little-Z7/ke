@@ -138,15 +138,15 @@ fn complete_answer(
     let user_prompt = prompt::load_user_prompt(&ke.model.system_prompt_file);
     let rules = redact_rules_for(ke, profile);
     if let Some(rules) = rules {
-        snapshot_text = redact::redact(&snapshot_text, rules).text;
+        snapshot_text = mask_with_shared(&snapshot_text, rules, shared);
     }
 
     let mut messages = prompt::system_messages(CONSTITUTION, &user_prompt, &snapshot_text);
     if let Ok(entries) = chat_log::read_tail(chat_log, TAIL_LIMIT) {
-        messages.extend(history_messages(&entries, user, rules));
+        messages.extend(history_messages(&entries, user, rules, shared));
     }
     let user_text = match rules {
-        Some(rules) => redact::redact(&user.text, rules).text,
+        Some(rules) => mask_with_shared(&user.text, rules, shared),
         None => user.text.clone(),
     };
     messages.push(ChatMessage::user(user_text));
@@ -157,10 +157,25 @@ fn complete_answer(
     }
 }
 
+/// Runs [`redact::mask`] against the session's single shared [`redact::Mapping`], holding its
+/// lock only for the duration of the `mask` call itself -- never across the network request that
+/// fetched `text` (the pane snapshot) or the model call that follows it. Sharing the same mapping
+/// with the composer processor is what keeps a placeholder in a pane and the same placeholder in
+/// the model's context pointing at the same real value.
+fn mask_with_shared(text: &str, rules: RedactRules, shared: &Shared) -> String {
+    match shared.redaction.lock() {
+        Ok(mut map) => redact::mask(text, rules, &mut map).text,
+        // Poisoned lock: fall back to the non-reversible gate rather than ever sending
+        // unredacted text to the model. Same fail-closed idea as `Mapping` hitting its capacity.
+        Err(_) => redact::redact(text, rules).text,
+    }
+}
+
 fn history_messages(
     entries: &[ChatEntry],
     current: &ChatEntry,
     rules: Option<RedactRules>,
+    shared: &Shared,
 ) -> Vec<ChatMessage> {
     let mut selected = Vec::new();
     for entry in entries {
@@ -179,7 +194,7 @@ fn history_messages(
             ChatRole::System => "system",
         };
         let text = match rules {
-            Some(rules) => redact::redact(&entry.text, rules).text,
+            Some(rules) => mask_with_shared(&entry.text, rules, shared),
             None => entry.text.clone(),
         };
         selected.push(ChatMessage {
