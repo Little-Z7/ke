@@ -5,6 +5,10 @@
 //! to. It reads session state through the normal JSON API over the socket the server hands it in
 //! `HERDR_SOCKET_PATH`, so it never touches server internals.
 //!
+//! Its roster spans every running session, not just the one it serves (see `sessions`): a manager
+//! that cannot see the pane waiting for you in another session is not much of a manager. Only the
+//! local session's failures end the process.
+//!
 //! The process is deliberately dumb about lifecycle: when the API stops answering it exits, and
 //! the supervisor in the server decides whether to start it again.
 
@@ -13,6 +17,7 @@ pub(crate) mod model;
 pub(crate) mod panel;
 pub(crate) mod processor;
 pub(crate) mod prompt;
+pub(crate) mod sessions;
 pub(crate) mod snapshot;
 pub(crate) mod supervisor;
 
@@ -23,14 +28,14 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use crate::api::client::{ApiClient, ConnectionTarget};
-use crate::api::schema::agents::AgentInfo;
-use crate::api::schema::{EmptyParams, Method, Request, ResponseResult};
 
 use super::paths::ResidentPaths;
+use sessions::SessionAgent;
 
 /// How often the panel is rebuilt from `agent.list`.
 const POLL: Duration = Duration::from_secs(3);
-/// Consecutive failed API calls before the resident assumes the server is gone.
+/// Consecutive failed API calls before the resident assumes the server is gone. Only the local
+/// session counts: another session going away is normal and must not take this resident with it.
 const MAX_API_FAILURES: u32 = 5;
 const API_TIMEOUT: Duration = Duration::from_secs(5);
 
@@ -82,10 +87,10 @@ pub(crate) fn run_resident_command(args: &[String]) -> io::Result<i32> {
     }
 }
 
-/// Shared, read-only view the processor thread needs from the poller.
+/// Shared, read-only view the processor and answerer threads need from the poller.
 #[derive(Debug, Default)]
 pub(crate) struct Shared {
-    pub agents: std::sync::Mutex<Vec<AgentInfo>>,
+    pub agents: std::sync::Mutex<Vec<SessionAgent>>,
 }
 
 fn run(
@@ -137,26 +142,40 @@ fn run(
             break;
         }
         let started = Instant::now();
-        match fetch_agents(&client) {
-            Ok(agents) => {
-                failures = 0;
-                tracker.observe(&agents, Instant::now());
-                if let Ok(mut slot) = shared.agents.lock() {
-                    *slot = agents.clone();
-                }
-                let panel = panel::build(&agents, &tracker, Instant::now());
-                // Always rewrite so `ts` moves and the panel never dims while we are alive.
-                if let Err(err) = write_atomic(&paths.panel_file, &panel.to_json()) {
-                    eprintln!("ke resident: panel write failed: {err}");
-                }
+        // Rediscovered every round so sessions started after this resident show up, and stopped
+        // ones drop out. `ApiClient` only holds a path, so this costs a directory read.
+        let discovered = sessions::discover(&api_socket);
+        let roster = sessions::fetch_all(&discovered, API_TIMEOUT);
+        if roster.local_ok {
+            failures = 0;
+        } else {
+            failures += 1;
+            eprintln!("ke resident: local agent.list failed ({failures}/{MAX_API_FAILURES})");
+            if failures >= MAX_API_FAILURES {
+                break;
             }
-            Err(err) => {
-                failures += 1;
-                eprintln!("ke resident: agent.list failed ({failures}/{MAX_API_FAILURES}): {err}");
-                if failures >= MAX_API_FAILURES {
-                    break;
-                }
-            }
+        }
+        if !roster.unreachable.is_empty() {
+            eprintln!(
+                "ke resident: sessions unreachable this round: {}",
+                roster.unreachable.join(", ")
+            );
+        }
+        // A degraded roster still refreshes the panel: the local rows are what the user watches,
+        // and an unreachable session gets its own row rather than vanishing.
+        tracker.observe(&roster.agents, Instant::now());
+        if let Ok(mut slot) = shared.agents.lock() {
+            *slot = roster.agents.clone();
+        }
+        let panel = panel::build(
+            &roster.agents,
+            &roster.unreachable,
+            &tracker,
+            Instant::now(),
+        );
+        // Always rewrite so `ts` moves and the panel never dims while we are alive.
+        if let Err(err) = write_atomic(&paths.panel_file, &panel.to_json()) {
+            eprintln!("ke resident: panel write failed: {err}");
         }
         let elapsed = started.elapsed();
         if elapsed < POLL {
@@ -170,25 +189,6 @@ fn run(
     let _ = processor_thread.join();
     let _ = answerer_thread.join();
     Ok(())
-}
-
-fn fetch_agents(client: &ApiClient) -> Result<Vec<AgentInfo>, String> {
-    let value = client
-        .request_value_with_timeout(
-            &Request {
-                id: "ke-resident:agent.list".into(),
-                method: Method::AgentList(EmptyParams::default()),
-            },
-            API_TIMEOUT,
-        )
-        .map_err(|err| err.to_string())?;
-    match crate::api::client::parse_response_value(value).map_err(|err| err.to_string())? {
-        crate::api::schema::SuccessResponse {
-            result: ResponseResult::AgentList { agents },
-            ..
-        } => Ok(agents),
-        other => Err(format!("unexpected agent.list response: {other:?}")),
-    }
 }
 
 /// Writes via a sibling temp file and rename so readers never see a partial panel.

@@ -54,6 +54,7 @@ Because ke is a fork tracking upstream, **prefer new ke-only files hooked in wit
 - `src/ke/` — everything ke adds that is not TUI chrome:
   - `paths.rs` — per-session `resident/` directory next to the session's socket (`composer.sock`, `panel.json`, `chat.jsonl`, `taskboard.json`, `resident.log`).
   - `resident/` — the `ke resident` process: one per session, started and restarted by `supervisor.rs` from the server when `[ke.model].enabled` is set. It reads session state **through the normal JSON API** (socket handed to it in `HERDR_SOCKET_PATH`), never server internals, and exits when the API stops answering.
+  - `resident/sessions.rs` — the cross-session roster. A resident serves one session but polls **every** running session (`session::list_sessions()`), because the pane waiting for you is often in another one. Two rules: `pane_id` is unique only within a session, so pane identity is keyed on `(session, pane_id)` (`AgentKey`); and only the **local** session's failures count toward shutdown — a remote session stopping must cost its own rows and nothing else. Pane *contents* stay local-only, so a project marked as never leaving the machine cannot be routed around through another session's model.
   - `redact.rs` — rule-based redaction gate applied to composer text and model context.
   - `chat_log.rs` — append-only `@ke` transcript shared by resident (writer) and client (tail reader).
   - `slash.rs` — `/ke …` commands and `//` passthrough, parsed client-side.

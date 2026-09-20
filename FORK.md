@@ -122,6 +122,7 @@ git tag ke-v<KE_VERSION> && git push origin ke/main ke-v<KE_VERSION>
 | 2026-09-18 | src/build_info.rs | 发布 ke-v0.3.2：Settings 模型页与可拖宽壳栏 |
 | 2026-09-20 | src/client/shell/composer.rs | 壳栏聚焦时 Ctrl+B 不再当光标左移，留给前缀键 |
 | 2026-09-20 | CLAUDE.md | 由指向 AGENTS.md 的符号链接改为壳自己的文件：壳的定位、命令、ke 层结构、fork 纪律与发布流程；上游规则仍指向未改动的 AGENTS.md |
+| 2026-09-20 | src/ke/resident/sessions.rs（新增）、mod.rs、panel.rs、snapshot.rs | 管家跨会话：枚举全部运行中会话并合并 roster；面板按 (会话, pane_id) 计时、非本会话行加 `[名字]` 前缀、连不上的会话单独一行；只有本会话 agent.list 失败才计入退出；窗格内容仍只读本会话，快照注明其它会话只有状态 |
 
 ## 同步上游
 
