@@ -1,11 +1,16 @@
-//! Added by ke: OpenAI-compatible Chat Completions over a curl subprocess.
+//! Added by ke: model providers behind `@ke` -- OpenAI-compatible Chat Completions over a curl
+//! subprocess (`provider = "openai"`), or a headless coding-agent CLI over a plain subprocess
+//! (`provider = "cli"`).
 //!
 //! The resident never takes an HTTP crate: it shells out to `curl -N` so SSE chunks can be
-//! accumulated as they arrive. Callers always get one finished string (or an error to write as
-//! assistant text). Nothing here panics on a bad provider.
+//! accumulated as they arrive. The CLI path shells out to `profile.command` instead, with the
+//! flattened prompt on stdin. Both paths give callers one finished string (or an error to write
+//! as assistant text). Nothing here panics on a bad provider.
 
 use std::io::{BufRead, BufReader, Read, Write};
+use std::path::Path;
 use std::process::Stdio;
+use std::time::{Duration, Instant};
 
 use serde::{Deserialize, Serialize};
 
@@ -102,17 +107,24 @@ pub(crate) fn content_from_completion_json(json: &str) -> Option<String> {
     }
 }
 
-/// POST `{base_url}/chat/completions` with `stream: true`. Errors are strings for the caller.
+/// Dispatches on `profile.provider`. `resident_dir` is only used by `provider = "cli"` (it
+/// becomes the child's working directory); the OpenAI-compatible path ignores it.
 pub(crate) fn complete(
     profile: &KeModelProfile,
     messages: &[ChatMessage],
+    resident_dir: &Path,
 ) -> Result<String, String> {
-    let provider = profile.provider.trim();
-    if !provider.is_empty() && provider != "openai" {
-        return Err(format!(
-            "v1 只支持 OpenAI 兼容的 Chat Completions，当前 provider={provider}"
-        ));
+    match profile.provider.trim() {
+        "" | "openai" => complete_openai(profile, messages),
+        "cli" => complete_cli(profile, messages, resident_dir),
+        other => Err(format!(
+            "v1 只支持 OpenAI 兼容的 Chat Completions（provider=\"openai\"）或 headless CLI（provider=\"cli\"），当前 provider={other}"
+        )),
     }
+}
+
+/// POST `{base_url}/chat/completions` with `stream: true`. Errors are strings for the caller.
+fn complete_openai(profile: &KeModelProfile, messages: &[ChatMessage]) -> Result<String, String> {
     if profile.base_url.trim().is_empty() {
         return Err("模型 profile 没有 base_url".into());
     }
@@ -246,6 +258,318 @@ pub(crate) fn complete(
     Err("模型返回空内容".into())
 }
 
+/// Maximum time to let a `provider = "cli"` subprocess run before treating it as hung.
+/// Headless coding-agent CLIs are noticeably slower than one HTTP round trip: a single simple
+/// answer measured around 42s against `kimi` in manual testing. 300s stays generous while still
+/// guaranteeing the resident thread does not block forever on a stuck child.
+const CLI_TIMEOUT: Duration = Duration::from_secs(300);
+/// Poll interval while waiting for the child to exit or to hit `CLI_TIMEOUT`.
+const CLI_POLL_INTERVAL: Duration = Duration::from_millis(100);
+/// Stderr is only used for diagnostics in error messages; keep excerpts bounded.
+const CLI_STDERR_TAIL_CHARS: usize = 2000;
+
+/// Runs `profile.command` as a headless coding-agent CLI: the flattened prompt goes on stdin,
+/// the cleaned stdout is the answer.
+fn complete_cli(
+    profile: &KeModelProfile,
+    messages: &[ChatMessage],
+    resident_dir: &Path,
+) -> Result<String, String> {
+    complete_cli_with_timeout(profile, messages, resident_dir, CLI_TIMEOUT)
+}
+
+/// Same as [`complete_cli`] with an injectable timeout so tests do not have to wait out the
+/// real `CLI_TIMEOUT`.
+fn complete_cli_with_timeout(
+    profile: &KeModelProfile,
+    messages: &[ChatMessage],
+    resident_dir: &Path,
+    timeout: Duration,
+) -> Result<String, String> {
+    let mut argv = profile.command.iter();
+    let program = match argv.next() {
+        Some(program) => program,
+        None => return Err("cli provider 没有配置 command".into()),
+    };
+    let args: Vec<&str> = argv.map(String::as_str).collect();
+    let prompt = flatten_prompt(messages);
+
+    // `resident_dir` (not the caller's cwd) so an agent CLI that reads project files like
+    // AGENTS.md/CLAUDE.md out of its working directory picks up the resident's own directory
+    // instead of whatever project the user happens to be sitting in.
+    let mut command = crate::noninteractive_process::command(program);
+    command
+        .args(&args)
+        .current_dir(resident_dir)
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped());
+    #[cfg(unix)]
+    {
+        // Put the child in a fresh process group (pgid == its own pid) so a timeout can kill
+        // the whole subtree via `kill_child_tree` below. A CLI is often a shell wrapper or
+        // spawns its own subprocesses; signaling only the direct child would leave those
+        // descendants running with our stdout/stderr pipes still open, which then hangs the
+        // reader threads' `read_to_string` well past the timeout instead of returning EOF.
+        std::os::unix::process::CommandExt::process_group(&mut command, 0);
+    }
+
+    let mut child = command
+        .spawn()
+        .map_err(|err| format!("cli 启动失败：{err}"))?;
+
+    let mut stdin = match child.stdin.take() {
+        Some(stdin) => stdin,
+        None => {
+            kill_child_tree(&mut child);
+            let _ = child.wait();
+            return Err("cli stdin 无法写入".into());
+        }
+    };
+    let stdout = match child.stdout.take() {
+        Some(stdout) => stdout,
+        None => {
+            kill_child_tree(&mut child);
+            let _ = child.wait();
+            return Err("cli stdout 无法读取".into());
+        }
+    };
+    let stderr_pipe = match child.stderr.take() {
+        Some(pipe) => pipe,
+        None => {
+            kill_child_tree(&mut child);
+            let _ = child.wait();
+            return Err("cli stderr 无法读取".into());
+        }
+    };
+
+    // Why this cannot deadlock: three helper threads own all blocking I/O, and the main
+    // thread below only ever calls the non-blocking `try_wait`.
+    //   - `writer_handle` writes the prompt then drops `stdin`, closing the pipe so the CLI
+    //     sees EOF on stdin and can stop waiting for more input (some CLIs otherwise hang
+    //     forever reading stdin).
+    //   - `stdout_handle` / `stderr_handle` drain their pipes concurrently with the write and
+    //     with each other, so a chatty child cannot fill an OS pipe buffer and block on a
+    //     write while nobody is reading it yet.
+    // Because the main thread never does a blocking read or a blocking `wait`, the timeout
+    // loop below always gets to check the deadline. On timeout we call `kill_child_tree`,
+    // which (on Unix) signals the whole process group the child leads, not just the direct
+    // child; every process holding our stdout/stderr pipes open dies, so the reader threads
+    // see EOF and return promptly, and joining them afterward cannot hang either.
+    let prompt_bytes = prompt.into_bytes();
+    let writer_handle = std::thread::spawn(move || {
+        let _ = stdin.write_all(&prompt_bytes);
+        // `stdin` (the write half of the pipe) drops here, closing it.
+    });
+    let stdout_handle = std::thread::spawn(move || {
+        let mut buffer = String::new();
+        let mut stdout = stdout;
+        let _ = stdout.read_to_string(&mut buffer);
+        buffer
+    });
+    let stderr_handle = std::thread::spawn(move || {
+        let mut buffer = String::new();
+        let mut pipe = stderr_pipe;
+        let _ = pipe.read_to_string(&mut buffer);
+        buffer
+    });
+
+    let deadline = Instant::now() + timeout;
+    let status = loop {
+        match child.try_wait() {
+            Ok(Some(status)) => break Some(status),
+            Ok(None) => {
+                if Instant::now() >= deadline {
+                    break None;
+                }
+                std::thread::sleep(CLI_POLL_INTERVAL);
+            }
+            Err(err) => {
+                kill_child_tree(&mut child);
+                let _ = child.wait();
+                let _ = writer_handle.join();
+                let _ = stdout_handle.join();
+                let _ = stderr_handle.join();
+                return Err(format!("等待 cli 结束失败：{err}"));
+            }
+        }
+    };
+
+    let status = match status {
+        Some(status) => status,
+        None => {
+            // Timed out: kill the process tree and reap the direct child so no zombie is
+            // left behind, then drain the reader threads -- the kill just closed every pipe
+            // end in the tree, so they see EOF promptly.
+            kill_child_tree(&mut child);
+            let _ = child.wait();
+            let _ = writer_handle.join();
+            let stderr_content = stderr_handle.join().unwrap_or_default();
+            let _ = stdout_handle.join();
+            let detail = tail_chars(stderr_content.trim(), CLI_STDERR_TAIL_CHARS);
+            return Err(if detail.is_empty() {
+                format!("cli 超时（超过 {}s 未退出，已终止）", timeout.as_secs())
+            } else {
+                format!(
+                    "cli 超时（超过 {}s 未退出，已终止）：{detail}",
+                    timeout.as_secs()
+                )
+            });
+        }
+    };
+
+    let _ = writer_handle.join();
+    let stdout_content = stdout_handle.join().unwrap_or_default();
+    let stderr_content = stderr_handle.join().unwrap_or_default();
+
+    let cleaned = strip_ansi(&stdout_content);
+    let cleaned = cleaned.trim();
+
+    if !status.success() && cleaned.is_empty() {
+        let detail = tail_chars(stderr_content.trim(), CLI_STDERR_TAIL_CHARS);
+        return Err(if detail.is_empty() {
+            format!("cli 失败（{status}）")
+        } else {
+            format!("cli 失败（{status}）：{detail}")
+        });
+    }
+
+    if cleaned.is_empty() {
+        let detail = tail_chars(stderr_content.trim(), CLI_STDERR_TAIL_CHARS);
+        return Err(if detail.is_empty() {
+            "cli 返回空内容".into()
+        } else {
+            format!("cli 返回空内容：{detail}")
+        });
+    }
+
+    Ok(cleaned.to_string())
+}
+
+/// Kills `child` and, on Unix, every other process in the group it leads (see the
+/// `process_group(0)` call at spawn time). A bare `child.kill()` only signals the direct
+/// child; a CLI that is itself a shell wrapper, or that forks its own helper/tool
+/// subprocesses, can leave those descendants alive and holding our stdout/stderr pipes
+/// open, which would keep the reader threads blocked in `read_to_string` past whatever
+/// timeout the caller intended. Best-effort and infallible: every caller already treats
+/// the outcome as "the process is gone" and follows up with `child.wait()` to reap it.
+fn kill_child_tree(child: &mut std::process::Child) {
+    #[cfg(unix)]
+    {
+        // SAFETY: FFI call with no preconditions beyond a valid pid, which `child.id()`
+        // guarantees. The negative pid targets the whole process group; `child` was spawned
+        // with `process_group(0)`, so it is the leader of that group (pgid == pid) and this
+        // reaches only processes we ourselves spawned into it.
+        let pid = child.id() as libc::pid_t;
+        unsafe {
+            libc::kill(-pid, libc::SIGKILL);
+        }
+    }
+    #[cfg(not(unix))]
+    {
+        let _ = child.kill();
+    }
+}
+
+/// Last `limit` chars of `text`, used to keep stderr excerpts in error messages bounded.
+/// Counts chars (not bytes) so it never splits a multi-byte character.
+fn tail_chars(text: &str, limit: usize) -> String {
+    let count = text.chars().count();
+    if count <= limit {
+        text.to_string()
+    } else {
+        text.chars().skip(count - limit).collect()
+    }
+}
+
+/// Flattens a Chat-Completions-style message list into one prompt for a CLI that only accepts
+/// free text on stdin.
+///
+/// All `system` messages (constitution, user prompt, pane snapshot) are kept verbatim and in
+/// full -- a CLI provider must see exactly the same system context the OpenAI-compatible path
+/// would have sent. Everything before the last `user` message is folded into a labeled
+/// "conversation so far" transcript; the last `user` message is broken out into its own
+/// clearly labeled section so the model cannot mistake it for history.
+fn flatten_prompt(messages: &[ChatMessage]) -> String {
+    let current_index = messages.iter().rposition(|message| message.role == "user");
+
+    let mut system_parts = Vec::new();
+    let mut history_parts = Vec::new();
+    for (index, message) in messages.iter().enumerate() {
+        if Some(index) == current_index {
+            continue;
+        }
+        match message.role.as_str() {
+            "system" => system_parts.push(message.content.as_str()),
+            "assistant" => history_parts.push(format!("Assistant: {}", message.content)),
+            "user" => history_parts.push(format!("User: {}", message.content)),
+            other => history_parts.push(format!("{other}: {}", message.content)),
+        }
+    }
+
+    let mut sections = Vec::new();
+    if !system_parts.is_empty() {
+        sections.push(system_parts.join("\n\n"));
+    }
+    if !history_parts.is_empty() {
+        sections.push(format!(
+            "Conversation so far:\n{}",
+            history_parts.join("\n\n")
+        ));
+    }
+    let current = current_index
+        .map(|index| messages[index].content.as_str())
+        .unwrap_or("");
+    sections.push(format!("Current question (answer only this):\n{current}"));
+
+    sections.join("\n\n---\n\n")
+}
+
+/// Strips ANSI escape sequences from CLI output: CSI sequences (`ESC [ ... final-byte`, e.g.
+/// SGR colors `\x1b[31m` and cursor movement `\x1b[2;5H`), OSC sequences (`ESC ] ... BEL` or
+/// `ESC ] ... ESC \`, e.g. terminal hyperlinks/titles), and other two-byte `ESC x` forms (e.g.
+/// charset selection). Plain text is left untouched.
+fn strip_ansi(text: &str) -> String {
+    let mut out = String::with_capacity(text.len());
+    let mut chars = text.chars().peekable();
+    while let Some(ch) = chars.next() {
+        if ch != '\u{1b}' {
+            out.push(ch);
+            continue;
+        }
+        match chars.peek() {
+            Some('[') => {
+                chars.next();
+                for next in chars.by_ref() {
+                    if ('@'..='~').contains(&next) {
+                        break;
+                    }
+                }
+            }
+            Some(']') => {
+                chars.next();
+                loop {
+                    match chars.next() {
+                        Some('\u{7}') | None => break,
+                        Some('\u{1b}') => {
+                            if chars.peek() == Some(&'\\') {
+                                chars.next();
+                            }
+                            break;
+                        }
+                        Some(_) => {}
+                    }
+                }
+            }
+            Some(_) => {
+                chars.next();
+            }
+            None => {}
+        }
+    }
+    out
+}
+
 fn authorization_header(profile: &KeModelProfile) -> Option<String> {
     let name = profile.api_key_env.trim();
     if name.is_empty() {
@@ -375,5 +699,194 @@ mod tests {
         let (body, status) = split_curl_body_and_status("oops");
         assert_eq!(body, "oops");
         assert_eq!(status, None);
+    }
+
+    #[test]
+    fn flatten_prompt_preserves_system_and_marks_current_question() {
+        let messages = vec![
+            ChatMessage::system("你是 ke 的管家。"),
+            ChatMessage::system("当前会话窗格快照：\npane_id=w1:p1 agent=codex"),
+            ChatMessage {
+                role: "user".into(),
+                content: "旧问题".into(),
+            },
+            ChatMessage {
+                role: "assistant".into(),
+                content: "旧回答".into(),
+            },
+            ChatMessage::user("谁在忙？"),
+        ];
+
+        let flat = flatten_prompt(&messages);
+
+        assert!(flat.contains("你是 ke 的管家。"), "{flat}");
+        assert!(flat.contains("pane_id=w1:p1 agent=codex"), "{flat}");
+        assert!(flat.contains("User: 旧问题"), "{flat}");
+        assert!(flat.contains("Assistant: 旧回答"), "{flat}");
+        assert!(
+            flat.contains("Current question (answer only this):\n谁在忙？"),
+            "{flat}"
+        );
+        // The current question is broken out once, not duplicated into the history transcript.
+        assert_eq!(flat.matches("谁在忙？").count(), 1);
+        // System context must precede the current-question section.
+        let system_pos = flat.find("你是 ke 的管家。").unwrap();
+        let current_pos = flat.find("Current question").unwrap();
+        assert!(system_pos < current_pos);
+    }
+
+    #[test]
+    fn flatten_prompt_handles_system_only_input() {
+        let messages = vec![ChatMessage::system("only system context")];
+        let flat = flatten_prompt(&messages);
+        assert!(flat.contains("only system context"));
+        assert!(flat.contains("Current question (answer only this):\n"));
+        assert!(!flat.contains("Conversation so far"));
+    }
+
+    #[test]
+    fn strip_ansi_removes_csi_sequences_and_keeps_text() {
+        assert_eq!(strip_ansi("\x1b[31mhello\x1b[0m"), "hello");
+        assert_eq!(strip_ansi("\x1b[2;5Hworld"), "world");
+        assert_eq!(
+            strip_ansi("plain text, no escapes"),
+            "plain text, no escapes"
+        );
+        assert_eq!(
+            strip_ansi("normal \x1b[1mbold\x1b[0m normal"),
+            "normal bold normal"
+        );
+    }
+
+    #[test]
+    fn strip_ansi_removes_osc_sequences() {
+        // OSC 8 hyperlink, BEL terminated.
+        assert_eq!(
+            strip_ansi("\x1b]8;;http://example.com\x07link\x1b]8;;\x07"),
+            "link"
+        );
+        // OSC terminated with ESC \ (ST) instead of BEL.
+        assert_eq!(strip_ansi("\x1b]0;title\x1b\\rest"), "rest");
+    }
+
+    #[test]
+    fn tail_chars_keeps_only_the_last_chars() {
+        assert_eq!(tail_chars("hello", 10), "hello");
+        assert_eq!(tail_chars("hello world", 5), "world");
+        assert_eq!(tail_chars("你好世界", 2), "世界");
+    }
+
+    #[test]
+    fn complete_rejects_unknown_provider() {
+        let profile = KeModelProfile {
+            provider: "unknown-thing".into(),
+            ..KeModelProfile::default()
+        };
+        let err = complete(&profile, &[], Path::new(".")).unwrap_err();
+        assert!(err.contains("cli"), "{err}");
+        assert!(err.contains("unknown-thing"), "{err}");
+    }
+
+    #[cfg(unix)]
+    fn cli_profile(command: Vec<&str>) -> KeModelProfile {
+        KeModelProfile {
+            provider: "cli".into(),
+            command: command.into_iter().map(String::from).collect(),
+            ..KeModelProfile::default()
+        }
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn cat_echoes_the_flattened_prompt_back() {
+        let messages = vec![
+            ChatMessage::system("system ctx"),
+            ChatMessage::user("hello?"),
+        ];
+        let expected = flatten_prompt(&messages);
+        let result = complete_cli(&cli_profile(vec!["cat"]), &messages, &std::env::temp_dir())
+            .expect("cat should echo stdin");
+        assert_eq!(result, expected.trim());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn cli_output_is_ansi_stripped_and_trimmed() {
+        let messages = vec![ChatMessage::user("hi")];
+        let script = "printf '\\n\\033[31mhello\\033[0m\\n\\n'";
+        let result = complete_cli(
+            &cli_profile(vec!["sh", "-c", script]),
+            &messages,
+            &std::env::temp_dir(),
+        )
+        .expect("colored output should be cleaned");
+        assert_eq!(result, "hello");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn cli_empty_output_is_an_error() {
+        let messages = vec![ChatMessage::user("hi")];
+        let err = complete_cli(
+            &cli_profile(vec!["sh", "-c", "true"]),
+            &messages,
+            &std::env::temp_dir(),
+        )
+        .unwrap_err();
+        assert!(err.contains("空"), "{err}");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn cli_nonzero_exit_with_empty_stdout_is_an_error() {
+        let messages = vec![ChatMessage::user("hi")];
+        let err = complete_cli(
+            &cli_profile(vec!["sh", "-c", "echo boom >&2; exit 3"]),
+            &messages,
+            &std::env::temp_dir(),
+        )
+        .unwrap_err();
+        assert!(err.contains("boom"), "{err}");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn cli_nonzero_exit_with_stdout_content_still_returns_that_content() {
+        let messages = vec![ChatMessage::user("hi")];
+        let result = complete_cli(
+            &cli_profile(vec!["sh", "-c", "echo ok; exit 2"]),
+            &messages,
+            &std::env::temp_dir(),
+        )
+        .expect("stdout content wins over a nonzero exit code");
+        assert_eq!(result, "ok");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn cli_timeout_kills_the_child_and_reports_an_error() {
+        let messages = vec![ChatMessage::user("hi")];
+        let started = Instant::now();
+        let err = complete_cli_with_timeout(
+            &cli_profile(vec!["sh", "-c", "sleep 30"]),
+            &messages,
+            &std::env::temp_dir(),
+            Duration::from_millis(200),
+        )
+        .unwrap_err();
+        assert!(err.contains("超时"), "{err}");
+        assert!(
+            started.elapsed() < Duration::from_secs(5),
+            "timeout should cut the wait short, took {:?}",
+            started.elapsed()
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn cli_missing_command_is_a_clear_error_not_a_panic() {
+        let messages = vec![ChatMessage::user("hi")];
+        let err = complete_cli(&cli_profile(vec![]), &messages, &std::env::temp_dir()).unwrap_err();
+        assert!(err.contains("command"), "{err}");
     }
 }

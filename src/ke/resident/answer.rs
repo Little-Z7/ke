@@ -151,7 +151,16 @@ fn complete_answer(
     };
     messages.push(ChatMessage::user(user_text));
 
-    match model::complete(profile, &messages) {
+    // The resident directory (where chat.jsonl lives) doubles as the cwd for `provider =
+    // "cli"` subprocesses, so a headless agent CLI reads the resident's own files instead of
+    // whatever project the user's active pane happens to be sitting in.
+    // chat.jsonl always sits in the resident directory, so the fallback is unreachable in
+    // practice. It must still not be the process cwd: the resident inherits that from the server,
+    // which is usually the user's project, and a CLI provider started there would read that
+    // project's own agent instructions into the manager's context.
+    let cwd_fallback = std::env::temp_dir();
+    let resident_dir = chat_log.parent().unwrap_or(&cwd_fallback);
+    match model::complete(profile, &messages, resident_dir) {
         Ok(text) => text,
         Err(err) => format!("模型调用失败：{err}"),
     }
