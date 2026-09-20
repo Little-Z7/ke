@@ -430,6 +430,44 @@ impl Drop for StatusCommandGuard {
     }
 }
 
+/// Configures `process`, before spawning, so a later [`ProcessTreeGuard::kill`] can terminate
+/// its whole process tree, not just the direct child. Puts the child in a fresh process group
+/// (pgid == its own pid); unlike Windows, no post-spawn binding step is needed because group
+/// membership is fixed at spawn time.
+pub(crate) fn configure_killable_process_tree_platform(process: &mut std::process::Command) {
+    use std::os::unix::process::CommandExt;
+
+    process.process_group(0);
+}
+
+/// Unix needs no post-spawn step -- `configure_killable_process_tree_platform` already put the
+/// child in its own process group before it started running -- so this is a zero-sized no-op
+/// that exists only to give both platforms the same `attach`/`kill` shape.
+pub(crate) struct ProcessTreeGuard;
+
+impl ProcessTreeGuard {
+    pub(crate) fn attach(_child: &mut std::process::Child) -> std::io::Result<Self> {
+        Ok(Self)
+    }
+
+    /// Kills every process in `child`'s process group, not just `child` itself. A bare
+    /// `child.kill()` only signals the direct child; a CLI that is itself a shell wrapper, or
+    /// that forks its own helper/tool subprocesses, can leave those descendants alive and
+    /// holding our stdout/stderr pipes open. Best-effort and infallible: callers already treat
+    /// the outcome as "the process is gone" and follow up with `child.wait()` to reap it.
+    pub(crate) fn kill(&mut self, child: &mut std::process::Child) {
+        // SAFETY: FFI call with no preconditions beyond a valid pid, which `child.id()`
+        // guarantees. The negative pid targets the whole process group; `child` was spawned
+        // with `process_group(0)` (see `configure_killable_process_tree_platform`), so it is the
+        // leader of that group (pgid == pid) and this reaches only processes we ourselves
+        // spawned into it.
+        let pid = child.id() as libc::pid_t;
+        unsafe {
+            libc::kill(-pid, libc::SIGKILL);
+        }
+    }
+}
+
 fn datetime_from_tm(value: &libc::tm) -> Option<time::PrimitiveDateTime> {
     let month = time::Month::try_from(u8::try_from(value.tm_mon + 1).ok()?).ok()?;
     let date = time::Date::from_calendar_date(

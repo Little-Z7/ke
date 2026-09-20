@@ -1090,6 +1090,136 @@ impl Drop for StatusCommandGuard {
     }
 }
 
+/// Configures `command`, before spawning, to start suspended so [`ProcessTreeGuard::attach`] can
+/// bind the not-yet-running process to a kill-on-close job object before anything it spawns gets
+/// a chance to escape that job.
+///
+/// `Command::creation_flags` replaces the whole flag set rather than adding to it, so a bare
+/// `creation_flags(CREATE_SUSPENDED)` call here would silently drop `CREATE_NO_WINDOW` if this
+/// command was already set up as a background command (see `configure_background_command_platform`
+/// above, which sets only `CREATE_NO_WINDOW`). Re-asserting both flags together in this single
+/// call keeps them both -- the same reason `configure_status_command` above combines them.
+/// Callers should treat this as the last creation-flags call made on the command.
+pub(crate) fn configure_killable_process_tree_platform(command: &mut std::process::Command) {
+    use std::os::windows::process::CommandExt;
+
+    command.creation_flags(CREATE_NO_WINDOW | CREATE_SUSPENDED);
+}
+
+/// Binds a `std::process::Child` (started suspended by `configure_killable_process_tree_platform`)
+/// to a fresh kill-on-close job object, then resumes it. Closing the job -- explicitly via
+/// [`ProcessTreeGuard::kill`], or implicitly on [`Drop`] -- terminates every process still in
+/// it, not just the direct child, which matters when the CLI is a shell wrapper or forks its
+/// own tool subprocesses that would otherwise keep holding our stdout/stderr pipes open.
+pub(crate) struct ProcessTreeGuard {
+    /// The job handle, or 0 once closed. Stored as `usize` for the same reason as
+    /// `StatusCommandGuard::process_group_id`/`job`: it lets `Drop` run without `unsafe Send`
+    /// gymnastics around a raw `HANDLE`.
+    job: usize,
+}
+
+impl ProcessTreeGuard {
+    /// On any failure, closes any job handle already created and terminates the still-suspended
+    /// `child` -- it was started with `CREATE_SUSPENDED` and, unless resumed, would otherwise
+    /// never run and never exit, leaking a process forever.
+    pub(crate) fn attach(child: &mut std::process::Child) -> std::io::Result<Self> {
+        // SAFETY: `CreateJobObjectW` with null name/attributes returns either a valid owned
+        // handle or null; the null case is checked immediately below.
+        let job = unsafe { CreateJobObjectW(std::ptr::null(), std::ptr::null()) };
+        if job.is_null() {
+            let error = std::io::Error::last_os_error();
+            let _ = child.kill();
+            return Err(error);
+        }
+
+        let mut limits: JOBOBJECT_EXTENDED_LIMIT_INFORMATION = unsafe { std::mem::zeroed() };
+        limits.BasicLimitInformation.LimitFlags = JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE;
+        let limits_size = match u32::try_from(size_of::<JOBOBJECT_EXTENDED_LIMIT_INFORMATION>()) {
+            Ok(size) => size,
+            Err(_) => {
+                // SAFETY: `job` is the valid handle created above and not yet closed.
+                unsafe {
+                    CloseHandle(job);
+                }
+                let _ = child.kill();
+                return Err(std::io::Error::other("job limits size exceeds u32"));
+            }
+        };
+        // SAFETY: `job` is valid, `limits` is a live local of the exact type the call expects,
+        // and `limits_size` matches its size.
+        if unsafe {
+            SetInformationJobObject(
+                job,
+                JobObjectExtendedLimitInformation,
+                std::ptr::from_ref(&limits).cast(),
+                limits_size,
+            )
+        } == 0
+        {
+            let error = std::io::Error::last_os_error();
+            unsafe {
+                CloseHandle(job);
+            }
+            let _ = child.kill();
+            return Err(error);
+        }
+
+        // SAFETY: `child.as_raw_handle()` is the process handle `std::process::Child` owns for
+        // the lifetime of `child`, so it stays valid for this call; `job` is valid as above.
+        if unsafe { AssignProcessToJobObject(job, child.as_raw_handle().cast()) } == 0 {
+            let error = std::io::Error::last_os_error();
+            unsafe {
+                CloseHandle(job);
+            }
+            let _ = child.kill();
+            return Err(error);
+        }
+
+        // The process only starts running once its (sole, still-suspended) primary thread is
+        // resumed here -- after the job assignment above, so any descendants it spawns are born
+        // into the job too, not just the process itself.
+        if let Err(error) = resume_suspended_process(Some(child.id())) {
+            unsafe {
+                CloseHandle(job);
+            }
+            let _ = child.kill();
+            return Err(error);
+        }
+
+        Ok(Self { job: job as usize })
+    }
+
+    /// Kills every process still in the job -- the CLI and any descendants it spawned -- not
+    /// just `child`. Best-effort and infallible like the Unix equivalent: callers already treat
+    /// the outcome as "the process tree is gone" and follow up with `child.wait()`.
+    pub(crate) fn kill(&mut self, child: &mut std::process::Child) {
+        if self.job != 0 {
+            // SAFETY: `self.job` was returned by `CreateJobObjectW` in `attach` and has not been
+            // closed yet (guarded by the `!= 0` check, matching `StatusCommandGuard::terminate`).
+            // `KILL_ON_JOB_CLOSE` terminates every process still assigned to the job.
+            unsafe {
+                CloseHandle(self.job as HANDLE);
+            }
+            self.job = 0;
+        }
+        // Defensive fallback for the case where the job was somehow never populated; a harmless
+        // no-op once the job close above already reaped the process.
+        let _ = child.kill();
+    }
+}
+
+impl Drop for ProcessTreeGuard {
+    fn drop(&mut self) {
+        if self.job != 0 {
+            // SAFETY: same as in `kill` above.
+            unsafe {
+                CloseHandle(self.job as HANDLE);
+            }
+            self.job = 0;
+        }
+    }
+}
+
 fn detached_custom_command_process_with_comspec(
     command: &str,
     comspec: Option<std::ffi::OsString>,

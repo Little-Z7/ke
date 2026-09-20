@@ -126,6 +126,8 @@ git tag ke-v<KE_VERSION> && git push origin ke/main ke-v<KE_VERSION>
 | 2026-09-20 | src/ke/redact.rs | 可逆脱敏：`Mapping`（仅内存，不序列化）+ `mask`（按类型发放稳定占位符 `KE_SECRET_n`/`KE_IP_n`/`KE_EMAIL_n`，同一真实值跨调用始终同号）+ `restore`（占位符按长度倒序匹配，还原原文）；以完整占位符开头的值一律跳过，保证已脱敏文本二次 mask 是 no-op；现有 `redact()` 未改动，暂无调用点（带 `#[allow(dead_code)]` 与移除条件） |
 | 2026-09-20 | src/ke/redact.rs、src/ke/resident/{mod,processor,answer}.rs | 脱敏路径改用可逆占位符：`Shared.redaction` 持会话级 `Mapping`，composer 提交与模型上下文（快照/用户消息/历史）四处共用同一份映射，锁只在 mask 期间持有；映射上限 10000 条，超限回退 `[REDACTED]`（不可逆但绝不放行明文），锁中毒同样回退；resident 启动时流式扫描 chat.jsonl 取各类占位符编号水位线，避免重启后复用编号导致两个真实值共号 |
 | 2026-09-20 | src/ke/resident/model.rs、answer.rs | 实现 `provider = "cli"`：管家大脑可跑在现成 agent CLI 上（argv 取 `[ke.model.profiles.*].command`，prompt 拍平后走 stdin，读 stdout）；cwd 固定为 resident 目录，避免 CLI 读到用户项目的 AGENTS.md；三线程各管阻塞 IO、主线程只 try_wait 轮询，300 秒超时；unix 下子进程独立进程组，超时按组 SIGKILL，否则 shell 包装 fork 出的孙进程会握着管道让 reader 线程等到自然结束；输出只剥 ANSI 不猜测特定 CLI 的装饰行 |
+| 2026-09-20 | src/platform/{mod,unix_common,windows}.rs、src/ke/resident/model.rs | 子进程树终止挪进 platform 层：`configure_killable_process_tree` + `ProcessTreeGuard`，model.rs 不再带 `#[cfg]` 与 libc；Windows 补上 job object（`KILL_ON_JOB_CLOSE`，`CREATE_SUSPENDED` 下先入 job 再 resume，五条失败路径都关句柄并杀掉挂起进程），此前只杀直接子进程会让 CLI 的后代握着管道使超时失效 |
+| 2026-09-20 | distribution/ke-install.sh、ke-install.ps1 | 下载 26MB 二进制时不再静默：终端下显示进度条；放弃条件由 `--max-time 300`（等于要求 ≥87KB/s）改为`--speed-limit 4096 --speed-time 30`（卡住才放弃，慢而在动的下载能完成）；PowerShell 侧加 `-TimeoutSec 30` 并提示无进度输出属正常 |
 
 ## 同步上游
 

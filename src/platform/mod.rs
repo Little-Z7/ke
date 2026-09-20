@@ -116,6 +116,41 @@ pub(crate) fn configure_background_command(command: &mut std::process::Command) 
 #[cfg(not(windows))]
 fn configure_background_command_platform(_command: &mut std::process::Command) {}
 
+/// Configures `command`, before spawning, so the process tree it starts can be killed as a
+/// whole through [`ProcessTreeGuard`] -- not just the direct child. A CLI subprocess is often a
+/// shell wrapper, or forks its own helper/tool subprocesses; killing only the direct child can
+/// leave those descendants alive and holding the parent's stdout/stderr pipes open, which then
+/// hangs any reader waiting on EOF well past an intended timeout.
+///
+/// On Unix this puts the child in a fresh process group at spawn time; no further binding step
+/// is needed. On Windows the process instead starts suspended so [`ProcessTreeGuard::attach`]
+/// can bind it to a kill-on-close job object before it runs -- otherwise it could fork
+/// descendants before the binding lands, and those would escape the job.
+pub(crate) fn configure_killable_process_tree(command: &mut std::process::Command) {
+    configure_killable_process_tree_platform(command);
+}
+
+#[cfg(not(any(unix, windows)))]
+fn configure_killable_process_tree_platform(_command: &mut std::process::Command) {}
+
+/// Cross-platform handle for killing a process tree that [`configure_killable_process_tree`]
+/// prepared. Unsupported platforms get a no-op stand-in with the same `attach`/`kill` shape;
+/// Unix and Windows each provide their own real implementation (see `unix_common.rs` and
+/// `windows.rs`).
+#[cfg(not(any(unix, windows)))]
+pub(crate) struct ProcessTreeGuard;
+
+#[cfg(not(any(unix, windows)))]
+impl ProcessTreeGuard {
+    pub(crate) fn attach(_child: &mut std::process::Child) -> std::io::Result<Self> {
+        Ok(Self)
+    }
+
+    pub(crate) fn kill(&mut self, child: &mut std::process::Child) {
+        let _ = child.kill();
+    }
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) struct PlatformCapabilities {
     pub(crate) live_handoff: bool,
@@ -294,7 +329,8 @@ mod remote_bridge_tests;
 mod unix_common;
 #[cfg(unix)]
 pub(crate) use unix_common::{
-    begin_cli_output, end_cli_output, forward_remote_bridge_stdio, RemoteBridgeWake,
+    begin_cli_output, configure_killable_process_tree_platform, end_cli_output,
+    forward_remote_bridge_stdio, ProcessTreeGuard, RemoteBridgeWake,
 };
 
 mod client_state;

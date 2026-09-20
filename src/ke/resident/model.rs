@@ -304,24 +304,34 @@ fn complete_cli_with_timeout(
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped());
-    #[cfg(unix)]
-    {
-        // Put the child in a fresh process group (pgid == its own pid) so a timeout can kill
-        // the whole subtree via `kill_child_tree` below. A CLI is often a shell wrapper or
-        // spawns its own subprocesses; signaling only the direct child would leave those
-        // descendants running with our stdout/stderr pipes still open, which then hangs the
-        // reader threads' `read_to_string` well past the timeout instead of returning EOF.
-        std::os::unix::process::CommandExt::process_group(&mut command, 0);
-    }
+    // Lets a hung or misbehaving CLI's whole process tree (not just the direct child) be killed
+    // as a unit below via `kill_child_tree`. A CLI is often a shell wrapper or spawns its own
+    // tool subprocesses; signaling only the direct child would leave those descendants running
+    // with our stdout/stderr pipes still open, which then hangs the reader threads'
+    // `read_to_string` well past the timeout instead of returning EOF.
+    crate::platform::configure_killable_process_tree(&mut command);
 
     let mut child = command
         .spawn()
         .map_err(|err| format!("cli 启动失败：{err}"))?;
 
+    // Must happen before stdin/stdout/stderr are used below: on Windows the child starts
+    // suspended (see `configure_killable_process_tree`) and only actually begins running once
+    // `attach` has bound it to a kill-on-close job, so no descendant can be forked before it is
+    // covered by that job.
+    let mut tree_guard = match crate::platform::ProcessTreeGuard::attach(&mut child) {
+        Ok(guard) => guard,
+        Err(err) => {
+            let _ = child.kill();
+            let _ = child.wait();
+            return Err(format!("cli 启动失败：{err}"));
+        }
+    };
+
     let mut stdin = match child.stdin.take() {
         Some(stdin) => stdin,
         None => {
-            kill_child_tree(&mut child);
+            kill_child_tree(&mut child, &mut tree_guard);
             let _ = child.wait();
             return Err("cli stdin 无法写入".into());
         }
@@ -329,7 +339,7 @@ fn complete_cli_with_timeout(
     let stdout = match child.stdout.take() {
         Some(stdout) => stdout,
         None => {
-            kill_child_tree(&mut child);
+            kill_child_tree(&mut child, &mut tree_guard);
             let _ = child.wait();
             return Err("cli stdout 无法读取".into());
         }
@@ -337,7 +347,7 @@ fn complete_cli_with_timeout(
     let stderr_pipe = match child.stderr.take() {
         Some(pipe) => pipe,
         None => {
-            kill_child_tree(&mut child);
+            kill_child_tree(&mut child, &mut tree_guard);
             let _ = child.wait();
             return Err("cli stderr 无法读取".into());
         }
@@ -352,10 +362,10 @@ fn complete_cli_with_timeout(
     //     with each other, so a chatty child cannot fill an OS pipe buffer and block on a
     //     write while nobody is reading it yet.
     // Because the main thread never does a blocking read or a blocking `wait`, the timeout
-    // loop below always gets to check the deadline. On timeout we call `kill_child_tree`,
-    // which (on Unix) signals the whole process group the child leads, not just the direct
-    // child; every process holding our stdout/stderr pipes open dies, so the reader threads
-    // see EOF and return promptly, and joining them afterward cannot hang either.
+    // loop below always gets to check the deadline. On timeout we call `kill_child_tree`, which
+    // kills the whole process tree the child leads, not just the direct child; every process
+    // holding our stdout/stderr pipes open dies, so the reader threads see EOF and return
+    // promptly, and joining them afterward cannot hang either.
     let prompt_bytes = prompt.into_bytes();
     let writer_handle = std::thread::spawn(move || {
         let _ = stdin.write_all(&prompt_bytes);
@@ -385,7 +395,7 @@ fn complete_cli_with_timeout(
                 std::thread::sleep(CLI_POLL_INTERVAL);
             }
             Err(err) => {
-                kill_child_tree(&mut child);
+                kill_child_tree(&mut child, &mut tree_guard);
                 let _ = child.wait();
                 let _ = writer_handle.join();
                 let _ = stdout_handle.join();
@@ -401,7 +411,7 @@ fn complete_cli_with_timeout(
             // Timed out: kill the process tree and reap the direct child so no zombie is
             // left behind, then drain the reader threads -- the kill just closed every pipe
             // end in the tree, so they see EOF promptly.
-            kill_child_tree(&mut child);
+            kill_child_tree(&mut child, &mut tree_guard);
             let _ = child.wait();
             let _ = writer_handle.join();
             let stderr_content = stderr_handle.join().unwrap_or_default();
@@ -446,29 +456,16 @@ fn complete_cli_with_timeout(
     Ok(cleaned.to_string())
 }
 
-/// Kills `child` and, on Unix, every other process in the group it leads (see the
-/// `process_group(0)` call at spawn time). A bare `child.kill()` only signals the direct
-/// child; a CLI that is itself a shell wrapper, or that forks its own helper/tool
-/// subprocesses, can leave those descendants alive and holding our stdout/stderr pipes
-/// open, which would keep the reader threads blocked in `read_to_string` past whatever
-/// timeout the caller intended. Best-effort and infallible: every caller already treats
-/// the outcome as "the process is gone" and follows up with `child.wait()` to reap it.
-fn kill_child_tree(child: &mut std::process::Child) {
-    #[cfg(unix)]
-    {
-        // SAFETY: FFI call with no preconditions beyond a valid pid, which `child.id()`
-        // guarantees. The negative pid targets the whole process group; `child` was spawned
-        // with `process_group(0)`, so it is the leader of that group (pgid == pid) and this
-        // reaches only processes we ourselves spawned into it.
-        let pid = child.id() as libc::pid_t;
-        unsafe {
-            libc::kill(-pid, libc::SIGKILL);
-        }
-    }
-    #[cfg(not(unix))]
-    {
-        let _ = child.kill();
-    }
+/// Kills `child`'s whole process tree via `guard` (see `configure_killable_process_tree` at
+/// spawn time and `ProcessTreeGuard` for how each platform tracks what "the tree" means). A
+/// bare `child.kill()` only signals the direct child; a CLI that is itself a shell wrapper, or
+/// that forks its own helper/tool subprocesses, can leave those descendants alive and holding
+/// our stdout/stderr pipes open, which would keep the reader threads blocked in
+/// `read_to_string` past whatever timeout the caller intended. Best-effort and infallible:
+/// every caller already treats the outcome as "the process is gone" and follows up with
+/// `child.wait()` to reap it.
+fn kill_child_tree(child: &mut std::process::Child, guard: &mut crate::platform::ProcessTreeGuard) {
+    guard.kill(child);
 }
 
 /// Last `limit` chars of `text`, used to keep stderr excerpts in error messages bounded.
