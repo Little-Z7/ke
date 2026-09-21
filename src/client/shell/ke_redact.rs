@@ -106,10 +106,14 @@ impl ClientKeRedactOverlay {
 /// Writes all six `[ke.redact]` keys via the shared `upsert_section_bool` helper (same approach
 /// as every other Settings write; no ad hoc TOML serialization).
 fn apply_redact_form(content: &str, config: &KeRedactConfig) -> String {
-    let mut next = crate::config::upsert_section_bool(content, "ke.redact", "api_keys", config.api_keys);
-    next = crate::config::upsert_section_bool(&next, "ke.redact", "private_keys", config.private_keys);
-    next = crate::config::upsert_section_bool(&next, "ke.redact", "env_secrets", config.env_secrets);
-    next = crate::config::upsert_section_bool(&next, "ke.redact", "internal_ips", config.internal_ips);
+    let mut next =
+        crate::config::upsert_section_bool(content, "ke.redact", "api_keys", config.api_keys);
+    next =
+        crate::config::upsert_section_bool(&next, "ke.redact", "private_keys", config.private_keys);
+    next =
+        crate::config::upsert_section_bool(&next, "ke.redact", "env_secrets", config.env_secrets);
+    next =
+        crate::config::upsert_section_bool(&next, "ke.redact", "internal_ips", config.internal_ips);
     next = crate::config::upsert_section_bool(&next, "ke.redact", "emails", config.emails);
     crate::config::upsert_section_bool(
         &next,
@@ -120,6 +124,13 @@ fn apply_redact_form(content: &str, config: &KeRedactConfig) -> String {
 }
 
 impl ClientShellState {
+    /// Opens Settings straight on the redact page, the way `/ke redact` reaches it.
+    pub(super) fn open_ke_redact_form(&mut self, outcome: &mut ClientShellInput) {
+        self.open_settings_overlay();
+        self.select_settings_section(ClientSettingsSection::KeRedact, outcome);
+        outcome.repaint = true;
+    }
+
     pub(super) fn ke_redact_form(&self) -> Option<&ClientKeRedactOverlay> {
         match self.overlay.as_ref() {
             Some(ClientShellOverlay::Settings(settings))

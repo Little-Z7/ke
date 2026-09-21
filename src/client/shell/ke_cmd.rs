@@ -54,6 +54,11 @@ impl ClientShellState {
                     Err(err) => self.finish_ke_slash(Some(&err), None, outcome),
                 }
             }
+            SlashCommand::Redact => {
+                self.overlay = None;
+                self.open_ke_redact_form(outcome);
+                self.finish_ke_slash(Some("脱敏规则"), None, outcome);
+            }
             SlashCommand::Model { arg: None } => {
                 self.overlay = None;
                 self.open_ke_model_form(outcome);

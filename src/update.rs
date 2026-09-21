@@ -2134,8 +2134,29 @@ pub fn ke_release_update() -> Result<Version, String> {
             crate::build_info::KE_INSTALL_COMMAND
         ));
     }
-    eprintln!("restart ke to use the new binary");
+    // Modified by ke: "restart ke" reads as "reopen the UI", but the TUI is a thin client and the
+    // old server keeps rendering the old version until it is stopped, so the update looks like it
+    // did nothing. Upstream's `active_restart_after_update_guidance` says this properly but names
+    // the `herdr` binary, and a ke user may well have upstream herdr installed too -- following
+    // that would stop the wrong server. So build the same guidance with ke's own command names.
+    eprintln!("{}", ke_restart_after_update_guidance());
     Ok(Version::parse(crate::build_info::KE_VERSION).unwrap_or_else(Version::current))
+}
+
+/// Modified by ke: upstream's equivalent hardcodes the `herdr` binary name. ke ships as `ke`, and
+/// a user may have upstream herdr installed alongside it, so naming the wrong binary would tell
+/// them to stop an unrelated server while ke keeps serving the old version.
+fn ke_restart_after_update_guidance() -> String {
+    let (stop, attach) = match crate::session::active_name() {
+        Some(name) => (
+            format!("ke session stop {name}"),
+            format!("ke session attach {name}"),
+        ),
+        None => ("ke server stop".to_string(), "ke".to_string()),
+    };
+    format!(
+        "Stop the old server to use the new version.\nStopping exits pane processes.\nRun `{stop}`, then run `{attach}` again."
+    )
 }
 
 pub(crate) fn ke_installer_command() -> Command {
@@ -2460,8 +2481,8 @@ mod tests {
     use super::*;
     use std::os::unix::net::UnixListener;
     use std::sync::{
-        Arc,
         atomic::{AtomicBool, Ordering},
+        Arc,
     };
     use std::sync::{Mutex, OnceLock};
     use std::thread;
@@ -2731,18 +2752,12 @@ mod tests {
         let nix = Path::new("/nix/store/abc123-herdr-0.6.6/bin/herdr");
         let direct = Path::new("/home/user/.local/bin/herdr");
 
-        assert!(
-            preview_channel_rejection_for_exe_path(homebrew)
-                .is_some_and(|message| message.contains("Homebrew"))
-        );
-        assert!(
-            preview_channel_rejection_for_exe_path(mise)
-                .is_some_and(|message| message.contains("mise"))
-        );
-        assert!(
-            preview_channel_rejection_for_exe_path(nix)
-                .is_some_and(|message| message.contains("Nix"))
-        );
+        assert!(preview_channel_rejection_for_exe_path(homebrew)
+            .is_some_and(|message| message.contains("Homebrew")));
+        assert!(preview_channel_rejection_for_exe_path(mise)
+            .is_some_and(|message| message.contains("mise")));
+        assert!(preview_channel_rejection_for_exe_path(nix)
+            .is_some_and(|message| message.contains("Nix")));
         assert!(preview_channel_rejection_for_exe_path(direct).is_none());
     }
 
@@ -3108,11 +3123,9 @@ mod tests {
             targets[0].socket_path,
             PathBuf::from("/tmp/custom-herdr.sock")
         );
-        assert!(
-            targets[0]
-                .stop_command
-                .contains(crate::api::SOCKET_PATH_ENV_VAR)
-        );
+        assert!(targets[0]
+            .stop_command
+            .contains(crate::api::SOCKET_PATH_ENV_VAR));
     }
 
     #[test]
@@ -3666,11 +3679,9 @@ mod tests {
         );
         let manifest: UpdateManifest = serde_json::from_str(&json).unwrap();
 
-        assert!(
-            release_info_from_manifest(&manifest)
-                .unwrap_err()
-                .contains("missing a SHA-256 checksum")
-        );
+        assert!(release_info_from_manifest(&manifest)
+            .unwrap_err()
+            .contains("missing a SHA-256 checksum"));
     }
 
     #[test]
@@ -3813,13 +3824,11 @@ mod tests {
         let manifest: UpdateManifest = serde_json::from_str(json)
             .expect("distribution/latest.json should match updater schema");
 
-        assert!(
-            !manifest
-                .metadata_for_version(&Version::parse(&manifest.version).unwrap())
-                .expect("metadata")
-                .notes_body()
-                .is_empty()
-        );
+        assert!(!manifest
+            .metadata_for_version(&Version::parse(&manifest.version).unwrap())
+            .expect("metadata")
+            .notes_body()
+            .is_empty());
         // distribution/latest.json describes the latest released binaries, not the
         // current unreleased checkout. Its protocol is updated by the release
         // flow together with the release assets.
@@ -3897,13 +3906,28 @@ mod tests {
                     .get("sha256")
                     .and_then(serde_json::Value::as_object)
                     .unwrap_or_else(|| panic!("missing checksums for release {version}"));
-                assert!(
-                    checksums
-                        .get("windows-x86_64")
-                        .and_then(serde_json::Value::as_str)
-                        .is_some_and(|value| value.len() == 64)
-                );
+                assert!(checksums
+                    .get("windows-x86_64")
+                    .and_then(serde_json::Value::as_str)
+                    .is_some_and(|value| value.len() == 64));
             }
         }
+    }
+
+    #[test]
+    fn ke_restart_guidance_names_ke_commands_not_herdr() {
+        let guidance = super::ke_restart_after_update_guidance();
+        assert!(
+            guidance.contains("ke server stop") || guidance.contains("ke session stop"),
+            "{guidance}"
+        );
+        assert!(
+            !guidance.contains("herdr"),
+            "a ke user may also run upstream herdr; naming it would stop the wrong server: {guidance}"
+        );
+        assert!(
+            guidance.contains("Stopping exits pane processes"),
+            "{guidance}"
+        );
     }
 }

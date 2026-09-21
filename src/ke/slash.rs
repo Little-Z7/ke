@@ -1,11 +1,12 @@
 //! Added by ke: `/ke` commands and `//` passthrough, parsed on the client before the processor.
 
-use crate::config::{KeConfig, KeModelProfile, upsert_section_bool, upsert_section_value};
+use crate::config::{upsert_section_bool, upsert_section_value, KeConfig, KeModelProfile};
 
 pub(crate) const HELP: &str = "\
 /ke help
-/ke model            打开设置里的模型页
+/ke model            打开设置里的模型页（含 cli 预设）
 /ke model [预设名|模板|模型id]
+/ke redact           打开设置里的脱敏页
 /ke provider <名> openai <base_url> <KEY_ENV>
 /ke prompt
 /ke memory
@@ -72,6 +73,10 @@ pub(crate) struct SlashHint {
 }
 
 pub(crate) const KE_SLASH_HINTS: &[SlashHint] = &[
+    SlashHint {
+        fill: "/ke redact",
+        label: "脱敏规则",
+    },
     SlashHint {
         fill: "/ke model",
         label: "模型配置",
@@ -178,6 +183,7 @@ pub(crate) fn slash_palette(text: &str) -> Option<Vec<SlashHint>> {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) enum SlashCommand {
     Help,
+    Redact,
     Status,
     Log,
     Prompt,
@@ -213,6 +219,7 @@ pub(crate) fn parse_ke_command(text: &str) -> Option<SlashCommand> {
     };
     Some(match verb {
         "help" => SlashCommand::Help,
+        "redact" => SlashCommand::Redact,
         "status" => SlashCommand::Status,
         "log" => SlashCommand::Log,
         "prompt" => SlashCommand::Prompt,
